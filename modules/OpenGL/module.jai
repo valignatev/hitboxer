@@ -1,4 +1,4 @@
-#module_parameters(DUMP_GL_ERRORS := false);
+#module_parameters(DUMP_GL_ERRORS := true);
 
 #load "./egl.jai";
 #load "./gl.jai";
@@ -156,8 +156,11 @@ gl_load :: () -> bool {
 }
 
 
-gl_create_context :: (display: *void, window: u64, major_version: s32, minor_version: s32, wanted_msaa: s32) -> EGLDisplay, EGLSurface, EGLContext, EGLConfig, chosen_msaa: s32 {
-    gl_load();
+gl_create_context :: (display_handle: *void, window_handle: u64, major_version: s32, minor_version: s32, wanted_msaa: s32) -> EGLDisplay, EGLSurface, EGLContext, EGLConfig, chosen_msaa: s32 {
+    result := gl_load();
+    if !result {
+        log_error("Failed gl_load\n");
+    }
 
     display: EGLDisplay;
     config: EGLConfig;
@@ -173,7 +176,7 @@ gl_create_context :: (display: *void, window: u64, major_version: s32, minor_ver
     {
         display = eglGetPlatformDisplayEXT(
             EGL_PLATFORM_XCB_EXT,
-            display,
+            display_handle,
             attrib_list.data,
         );
         assert(xx display != EGL_NO_DISPLAY, "Failed to get EGL display");
@@ -230,7 +233,7 @@ gl_create_context :: (display: *void, window: u64, major_version: s32, minor_ver
             EGL_NONE,
         ];
 
-        surface = eglCreateWindowSurface(display, config, window, attr.data);
+        surface = eglCreateWindowSurface(display, config, window_handle, attr.data);
         if (xx surface == EGL_NO_SURFACE) {
             log_error("Cannot create EGL surface\n");
         }

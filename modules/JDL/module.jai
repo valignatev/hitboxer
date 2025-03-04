@@ -22,7 +22,8 @@ main_display :: *_main_display;
 #scope_export
 
 Display :: union {
-    #as using xcb: XCB_Display;
+    #as using base: Base_Display;
+    #as xcb: XCB_Display;
 }
 
 
@@ -44,28 +45,43 @@ Base_Display :: struct {
     get_dimensions: #type (
         window: *Window,
         right_handed: bool) -> x: s32, y: s32, width: s32, height: s32, success: bool;
+
+    get_mouse_pointer_position: #type (
+        display: *Display,
+        right_handed := false) -> x: s32, y: s32, success: bool;
 }
 
 
 Window :: union {
-    #as using xcb: XCB_Window;
+    #as base: Base_Window;
+    #as xcb: XCB_Window;
 }
 
 Base_Window :: struct {
     type := Window;
     display: *Display;
     window_minimized := false;
+
+    get_mouse_pointer_position: #type (
+        display: *Window,
+        right_handed := false) -> x: s32, y: s32, success: bool;
 }
 
 
-operator== :: (a_base: *Window, b_base: *Window) -> bool {
-    if a_base.type == XCB_Window && b_base.type == XCB_Window {
-        a := cast(*XCB_Window, a_base);
-        b := cast(*XCB_Window, b_base);
-        return a.handle == b.handle;
+operator== :: (a: *Window, b: *Window) -> bool {
+    if a == null || b == null {
+        return a == b;
     }
 
-    assert(false, "Not implemented for a: % and b:%", a_base.type, b_base.type);
+    if a.base.type != b.base.type {
+        return false;
+    }
+
+    if a.base.type == XCB_Window {
+        return a.xcb.handle == b.xcb.handle;
+    }
+
+    assert(false, "Not implemented for a: % and b:%", a.base.type, b.base.type);
     return false;
 }
 
@@ -99,8 +115,20 @@ create_window :: (window_width: s32, window_height: s32, window_title: string) -
 
 
 get_dimensions :: inline (window: *Window, right_handed: bool) -> x: s32, y:s32, width: s32, height: s32, success := true {
-    x, y, w, h, s := window.display.get_dimensions(window, right_handed);
+    x, y, w, h, s := window.base.display.base.get_dimensions(window, right_handed);
     return x, y, w, h, s;
+}
+
+
+get_mouse_pointer_position :: inline (window: *Window, right_handed: bool) -> x: int, y: int, success: bool {
+    x, y, s := window.base.get_mouse_pointer_position(window, right_handed);
+    return xx x, xx y, s;
+}
+
+
+get_mouse_pointer_position :: inline (right_handed: bool) -> x: int, y: int, success: bool {
+    x, y, s := main_display.get_mouse_pointer_position(main_display, right_handed);
+    return xx x, xx y, s;
 }
 
 
@@ -112,5 +140,7 @@ wait_for_events :: inline () {
 Window_Type :: *Window;
 INVALID_WINDOW : Window_Type : null;
 
+#scope_file
+// Basic :: #import "Basic";
 #import "Hash_Table";
 
