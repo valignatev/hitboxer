@@ -632,7 +632,7 @@ get_key_name :: (key_scan_code: u32) -> string {
     key_name: string;
 
     xkb_keycode: xkb.xkb_keycode_t = XKB_EVDEV_OFFSET + key_scan_code;
-    keysym := xkb.xkb_state_key_get_one_sym(JDL.main_display.xkb_state, xkb_keycode);
+    keysym := xkb.xkb_state_key_get_one_sym(JDL.main_display.xcb.xkb_state, xkb_keycode);
     // This doesn't do anything for some reason
     keysym = xkb.xkb_keysym_to_upper(keysym);
 

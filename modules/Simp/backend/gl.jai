@@ -26,8 +26,8 @@ backend_init :: (info: *Window_Info) {
             info.msaa = chosen_msaa;
             info.specific.hdc     = hdc;
         } else #if OS == .LINUX {
-            xcb_window := cast(*XCB_Window)info.window;
-            display := xcb_window.display.handle;
+            xcb_window := *info.window.xcb;
+            display := xcb_window.display.xcb.handle;
             the_egl_display, the_egl_surface, the_gl_context, the_egl_config, info.msaa = gl_create_context(xx display, xx xcb_window.handle, MINIMUM_GL_MAJOR_VERSION, MINIMUM_GL_MINOR_VERSION, wanted_msaa=info.wanted_msaa);
             info.specific.egl_surface = the_egl_surface;
             info.specific.egl_display = the_egl_display;
@@ -62,6 +62,7 @@ backend_init :: (info: *Window_Info) {
         #if OS == .LINUX  {
             // glXMakeCurrent(x_global_display, glx_window, the_gl_context);
             ok := eglMakeCurrent(the_egl_display, info.specific.egl_surface, info.specific.egl_surface, the_gl_context);
+            gl_enable_debug_output(break_on_error = true);
 
             assert(xx ok, "Failed to make context current");
 
@@ -71,7 +72,7 @@ backend_init :: (info: *Window_Info) {
         }
 
         #if OS != .ANDROID { // Not available in the GLES module yet.
-            gl_load();
+            // gl_load();
             gl_enable_debug_output(break_on_error = true);
         }
 
@@ -168,7 +169,7 @@ swap_buffers :: (window: Window_Type, vsync := true) {  // @Incomplete: Have som
         }
 
         // glXSwapBuffers(x_global_display, info.specific.glx_window);
-        eglSwapBuffers(window.display.handle, info.specific.egl_surface);
+        eglSwapBuffers(the_egl_display, info.specific.egl_surface);
     } else #if OS == .MACOS {
         // On macOS, OpenGL buffer swapping is done on the context, not on the view.
         // So we can only swap for the active window. (And you need to swap before switching to another view).

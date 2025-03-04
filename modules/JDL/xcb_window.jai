@@ -53,6 +53,7 @@ xcb_init_display :: (display: *Display) -> bool {
     d.base.create_window = xcb_create_window;
     d.base.get_dimensions = xcb_get_dimensions;
     d.base.wait_for_events = xcb_wait_for_events;
+    d.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
     
     d.handle = xcb.xcb_connect(null, null);
     con_errors := xcb.xcb_connection_has_error(d.handle);
@@ -132,19 +133,21 @@ xcb_init_display :: (display: *Display) -> bool {
 
 xcb_create_window :: (display: *Display, window_ret: *Window, width: s32, height: s32, window_name: string, window_x := 0, window_y := 0, parent: *Window = INVALID_WINDOW, background_color_rgb := DEFAULT_WINDOW_CREATION_COLOR) -> bool {
     // assert display.xcb;
-    xd := *display.xcb;
+    d := *display.xcb;
     window_ret.base.type = XCB_Window;
     window_ret.base.display = display;
-    screen := xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(xd.handle)).data;
-    xcb_file_descriptor := xcb.xcb_get_file_descriptor(xd.handle);
+    window_ret.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
+
+    screen := xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(d.handle)).data;
+    xcb_file_descriptor := xcb.xcb_get_file_descriptor(d.handle);
 
     event_mask := xcb.xcb_event_mask_t.EXPOSURE | .STRUCTURE_NOTIFY | .FOCUS_CHANGE | .ENTER_WINDOW | .LEAVE_WINDOW | .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE | .POINTER_MOTION;
-    window := xcb.xcb_generate_id(xd.handle);
+    window := xcb.xcb_generate_id(d.handle);
     prop_mask := xcb.xcb_cw_t.BACK_PIXEL | .EVENT_MASK;
     prop_list := u32.[screen.black_pixel, xx event_mask];
 
     xcb.xcb_create_window_checked(
-        c=xd.handle,
+        c=d.handle,
         depth=xcb.XCB_COPY_FROM_PARENT,
         wid=window,
         parent=screen.root,
@@ -156,17 +159,17 @@ xcb_create_window :: (display: *Display, window_ret: *Window, width: s32, height
     );
 
     xcb.xcb_change_property(
-        xd.handle,
+        d.handle,
         .REPLACE,
         window,
-        xd.atoms.WM_PROTOCOLS,
+        d.atoms.WM_PROTOCOLS,
         xx xcb.xcb_atom_enum_t.ATOM, 
-        32, 1, *xd.atoms.WM_DELETE_WINDOW,
+        32, 1, *d.atoms.WM_DELETE_WINDOW,
     );
 
     class_sz := tprint("%\0%\0", ifx window_name then window_name else "jai-application", "hitboxer");
     xcb.xcb_change_property(
-        xd.handle,
+        d.handle,
         .REPLACE,
         window,
         xx xcb.xcb_atom_enum_t.WM_CLASS,
@@ -174,25 +177,51 @@ xcb_create_window :: (display: *Display, window_ret: *Window, width: s32, height
         8, xx class_sz.count, class_sz.data,
     );
 
-    xcb.xcb_map_window(xd.handle, window);
-    xcb.xcb_flush(xd.handle);
+    xcb.xcb_map_window(d.handle, window);
+    xcb.xcb_flush(d.handle);
 
     // OpenGL
 
-    window_ret.handle = window;
+    window_ret.xcb.handle = window;
     return true;;
 }
 
 xcb_get_dimensions :: (window: *Window, right_handed: bool) -> (x: s32, y: s32, width: s32, height: s32, success := true) {
     // xcb.xcb_check_usage(null, window);
-    xw : *XCB_Window = window;
-    cookie := xcb.xcb_get_geometry(xw.display.handle, xw.handle);
-    geometry := xcb.xcb_get_geometry_reply(xw.display.handle, cookie, null);
+    w : *XCB_Window = window;
+    cookie := xcb.xcb_get_geometry(w.display.xcb.handle, w.handle);
+    geometry := xcb.xcb_get_geometry_reply(w.display.xcb.handle, cookie, null);
     return 0, 0, xx geometry.width, geometry.height, true;
 }
 
 
 xcb_wait_for_events :: (display: *Display) {
+
+}
+
+
+xcb_get_mouse_pointer_position :: (display: *Display, right_handed := false) -> x: s32, y: s32, success: bool {
+    // xcb_check_usage(display, null);
+    d: *XCB_Display = display;
+
+    cookie := xcb.xcb_query_pointer(d.handle, d.screen.root);
+    reply  := xcb.xcb_query_pointer_reply(d.handle, cookie, null);
+    defer c_free(reply);
+
+    return reply.root_x, reply.root_y, true;
+}
+
+
+xcb_get_mouse_pointer_position :: (window: *Window, right_handed: bool) -> x: s32, y: s32, success: bool {
+    // xcb_check_usage(null, window);
+    w : *XCB_Window = window;
+    d := w.display;
+
+    cookie := xcb.xcb_query_pointer(d.xcb.handle, w.handle);
+    reply  := xcb.xcb_query_pointer_reply(d.xcb.handle, cookie, null);
+    defer c_free(reply);
+
+    return reply.win_x, reply.win_y, true;
 }
 
 

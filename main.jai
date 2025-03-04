@@ -675,6 +675,25 @@ main :: () {
         return;
     }
 
+    // Mostly copy-paste from GetRect_LeftHanded
+    p: Vector2 = ---;
+    c: Vector4 = ---;
+    memory: [] u8;
+    gd_draw_procs := Draw_Procs.{
+        texture_load_from_memory   = Simp.texture_load_from_memory,
+        set_scissor                = Simp.set_scissor,
+        clear_scissor              = Simp.clear_scissor,
+        set_shader_for_color       = Simp.set_shader_for_color,
+        set_shader_for_images      = Simp.set_shader_for_images,
+        prepare_text               = Simp.prepare_text,
+        draw_prepared_text         = Simp.draw_prepared_text,
+        get_mouse_pointer_position = get_mouse_pointer_position,
+        get_font_at_size           = #procedure_of_call Simp.get_font_at_size(memory, 1),
+        immediate_triangle         = Simp.immediate_triangle,
+        immediate_quad             = #procedure_of_call Simp.immediate_quad(p, p, p, p, c),
+        immediate_flush            = Simp.immediate_flush,
+    };
+
     the_window = create_window(window_width, window_height, "Hitboxer v0.12");
 
     // I want to init everything after the Window, because if there's an error, I want to potentially
@@ -697,11 +716,11 @@ main :: () {
     // TODO: Need to separate detecting focused program and setting up keyboard hook. Probably...
     start_detecting_focused_program();
 
-    start_logging_keys();
+    // start_logging_keys();
 
     Simp.set_render_target(the_window, .LEFT_HANDED);
     init_fonts(the_window);
-    ui_init();
+    ui_init("", *gd_draw_procs);
 
     subwindow_info_new_profile.open = false;
     subwindow_info_presets_confirmation.open = false;
@@ -820,7 +839,7 @@ draw_one_frame :: (dt: float, window: *Window) {
     padding := default_padding;
 
     x:, y:, window_width, window_height = get_dimensions(window, false);
-    ui_per_frame_update(window.handle, 800, 800, current_time);
+    ui_per_frame_update(window, 800, 800, current_time);
 
     //
     // Profiles
@@ -1407,15 +1426,22 @@ working_directory_set := false;
 mapping_resolving_hook_is_installed := false;
 mapping_setting_hook_is_installed := false;
 
+GetRect_Type_Indicator :: struct {
+    Window_Type :: *Window;
+    Font :: Simp.Dynamic_Font;
+    Font_Effects :: Simp.Font_Effects;
+    Texture :: Simp.Texture;
+}
+
 #import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
 #import "Hash_Table";
 Input :: #import "Input";
 Simp :: #import "Simp";
-using GetRect :: #import "GetRect_LeftHanded";
+#import "JDL";
+using GetRect :: #import "GetRect_LeftHanded"()(Type_Indicator = GetRect_Type_Indicator);
 #import "Math";
 #import "String";
 System :: #import "System";
-#import "JDL";
 tfh :: #import "Text_File_Handler";
 #import "Reflection";
 #import "File";
