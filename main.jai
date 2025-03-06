@@ -663,7 +663,7 @@ main :: () {
     active_profile = active_profile_in_ui;
 
     // TODO: Need to separate detecting focused program and setting up keyboard hook. Probably...
-    start_detecting_focused_program();
+    // start_detecting_focused_program();
 
     // start_logging_keys();
 
@@ -685,7 +685,8 @@ main :: () {
         if !need_to_rerender {
             wait_for_events();
         }
-        // Input.update_window_events();
+
+        JDL.update_window_events();
  
         for Input.get_window_resizes() {
             Simp.update_window(it.window);
@@ -1180,7 +1181,7 @@ draw_one_frame :: (dt: float, window: *Window) {
     }
 }
 
-draw_new_profile_selector :: (r: Rect, data: *void) {
+draw_new_profile_selector :: (state: *Subwindow_State, r: Rect, data: *void) {
     using current_program_state;
     button_height := default_button_height;
 
@@ -1243,7 +1244,7 @@ draw_new_profile_selector :: (r: Rect, data: *void) {
     end_scrollable_region(region, s.x + s.w, s.y + s.h, *scroll_value_new_profile);
 }
 
-draw_presets_confirmation :: (base_r: Rect, data: *void) {
+draw_presets_confirmation :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     using current_program_state;
     selected_preset := cast(*Preset_Data)data;
 
