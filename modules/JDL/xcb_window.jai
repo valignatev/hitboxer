@@ -1,6 +1,9 @@
+// TODO: remove this namespace
 xcb :: #import,file "./xcb.jai";
-xkb :: #import,file "./xkbcommon.jai";
 #import,file "./xcb_xkb.jai";
+#import "libxkbcommon";
+
+#load "./x11.jai";
 
 Saved_Window_Info :: struct {
 
@@ -32,11 +35,6 @@ XCB_Display :: struct {
         UTF8_STRING: xcb.xcb_atom_t;
     }
 
-    xkb_event_base: u8;
-    xkb_context: *xkb.xkb_context;
-    xkb_keymap: *xkb.xkb_keymap;
-    xkb_state: *xkb.xkb_state;
-
     currently_hovered_window: *XCB_Window;
 }
 
@@ -54,6 +52,16 @@ toggle_fullscreen :: (win: Window, desire_fullscreen: bool, saved: *Saved_Window
 
 
 xcb_init_display :: (display: *Display) -> bool {
+    if !load_procs(
+        *xcb_xkb,
+        .["libxcb-xkb.so.1", "libxcb-xkb.so" ],
+        *xcb_xkb_loaded,
+    ) {
+        return false;
+    }
+
+    if !xkbcommon_load(init_xcb_compat=true) return false;
+    
     d := XCB_Display.{ base = display };
     d.base.type = XCB_Display;
     d.base.create_window = xcb_create_window;
@@ -61,6 +69,7 @@ xcb_init_display :: (display: *Display) -> bool {
     d.base.wait_for_events = xcb_wait_for_events;
     d.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
     d.base.update_window_events = xcb_update_window_events;
+    d.base.translate_key_code  = x11_translate_key_code;
     
     d.handle = xcb.xcb_connect(null, null);
     con_errors := xcb.xcb_connection_has_error(d.handle);
@@ -85,6 +94,7 @@ xcb_init_display :: (display: *Display) -> bool {
     array_reserve(*atom_infos, tis.members.count);
     for atom: tis.members {
         create := false;
+        // Implement @create note lmao
         if atom.name == "UTF8_STRING"{
             create = true;
         }
@@ -107,25 +117,35 @@ xcb_init_display :: (display: *Display) -> bool {
         c_free(reply);
     }
 
-    // and libxkbcommon
-    major: u16 = 1;
-    minor: u16 = 0;
-    ret := xkb.xkb_x11_setup_xkb_extension(
+    // And libxkbcommon
+    // TODO: Maybe extract it into xkbcommon.jai
+    xkb_major: u16 = 1;
+    xkb_minor: u16 = 0;
+    ret := xkb_x11_setup_xkb_extension(
         d.handle,
-        major,
-        minor,
+        xkb_major,
+        xkb_minor,
         0,
-        *major, *minor, *d.xkb_event_base, null,
+        *xkb_major, *xkb_minor, *d.base.xkb_state.event_base, null,
     );
 
     if (!ret) {
         log_error("Couldn't setup XKB extension\n");
         return false; 
     }
+    log("XCB: xcb-xkb version %.%", xkb_major, xkb_minor);
 
-    d.xkb_context = xkb.xkb_context_new(.NO_FLAGS);
+    affect := xcb_xkb_event_type_t.NEW_KEYBOARD_NOTIFY | .MAP_NOTIFY | .STATE_NOTIFY;
+    map_parts := xcb_xkb_map_part_t.KEY_TYPES | .KEY_SYMS | .MODIFIER_MAP | .EXPLICIT_COMPONENTS | .KEY_ACTIONS | .VIRTUAL_MODS | .VIRTUAL_MOD_MAP;
+    state_parts := xcb_xkb_state_part_t.MODIFIER_BASE | .MODIFIER_LATCH | .MODIFIER_LOCK | .GROUP_BASE | .GROUP_LATCH | .GROUP_LOCK;
+    details := xcb_xkb_select_events_details_t.{
+        affectNewKeyboard = .KEYCODES,
+        newKeyboardDetails = .KEYCODES,
+        affectState = state_parts,
+        stateDetails = state_parts,
+    };
 
-    core_kbd_device_id := xkb.xkb_x11_get_core_keyboard_device_id(d.handle);
+    core_kbd_device_id := xkb_x11_get_core_keyboard_device_id(d.handle);
     if (core_kbd_device_id == -1) {
         log_error("Couldn't find core keyboard device\n");
         return false;
@@ -133,20 +153,26 @@ xcb_init_display :: (display: *Display) -> bool {
         log("Core keyboard device is %\n", core_kbd_device_id);
     }
 
-    d.xkb_keymap = xkb.xkb_x11_keymap_new_from_device(d.xkb_context, d.handle, core_kbd_device_id, 0);
-
-    d.xkb_state = xkb.xkb_x11_state_new_from_device(d.xkb_keymap, d.handle, core_kbd_device_id);
-    if (!d.xkb_state) {
-        log_error("Couldn't create xkb state for device\n");
-        return false;
-    }
+    xcb_xkb.xcb_xkb_select_events_aux(xx d.handle, xx core_kbd_device_id, affect, 0, 0, map_parts, map_parts, *details);
+    if !xkb_state_init(*d, cast(*xcb_connection_t)d.handle) return false;
 
     display.xcb = d;
     return true;
 }
 
 
-xcb_create_window :: (display: *Display, window_ret: *Window, width: s32, height: s32, window_name: string, window_x := 0, window_y := 0, parent: *Window = INVALID_WINDOW, background_color_rgb := DEFAULT_WINDOW_CREATION_COLOR) -> bool {
+xcb_create_window :: (
+    display: *Display,
+    window_ret: *Window,
+    width: s32,
+    height: s32,
+    window_name: string,
+    window_x := 0,
+    window_y := 0,
+    window_class: string = "JDL-jai-application",
+    parent: *Window = INVALID_WINDOW,
+    background_color_rgb := DEFAULT_WINDOW_CREATION_COLOR
+) -> bool {
     // assert display.xcb;
     d := *display.xcb;
     screen := d.screen;
@@ -183,7 +209,8 @@ xcb_create_window :: (display: *Display, window_ret: *Window, width: s32, height
         32, 1, *d.atoms.WM_DELETE_WINDOW,
     );
 
-    class_sz := tprint("%\0%\0", ifx window_name then window_name else "jai-application", "hitboxer");
+    class_sz := sprint("%\0%\0", ifx window_name then window_name else window_class, window_class);
+    defer free(class_sz);
     xcb.xcb_change_property(
         d.handle,
         .REPLACE,
@@ -321,22 +348,22 @@ xcb_update_window_events :: (display: *Display) {
 
         response_type := pending_event.response_type & ~0x80;
 
-        if response_type == d.xkb_event_base {
+        if response_type == d.base.xkb_state.event_base {
             ev := cast(*xcb.xcb_generic_event_t) pending_event;
             if ev.pad0 == {
                 case XCB_XKB_NEW_KEYBOARD_NOTIFY; #through;
                 case XCB_XKB_MAP_NOTIFY; {
                     log("Reloading keyboard map");
-                    // ld_xkb_state_init(d, d.handle);
+                    xkb_state_init(d, d.handle);
 
                 }
                 case XCB_XKB_STATE_NOTIFY; {
                     ev := cast(*xcb_xkb_state_notify_event_t) pending_event;
-                    // ld_xkb_state_set_mods(
-                    //     xd,
-                    //     ev.baseMods, ev.latchedMods, ev.lockedMods,
-                    //     xx ev.baseGroup, xx ev.latchedGroup, xx ev.lockedGroup,
-                    // );
+                    xkb_state_set_mods(
+                        d,
+                        ev.baseMods, ev.latchedMods, ev.lockedMods,
+                        xx ev.baseGroup, xx ev.latchedGroup, xx ev.lockedGroup,
+                    );
                 }
             }
         } else if response_type == {
@@ -381,39 +408,61 @@ xcb_update_window_events :: (display: *Display) {
             case XCB_KEY_PRESS; #through;
             case XCB_KEY_RELEASE;
                 ev := cast(*xcb.xcb_key_press_event_t) pending_event;
-                // event_type := ifx response_type == XCB_KEY_PRESS then LD_XKB_Key_Event_Type.Press else .Release;
-                // ld_xkb_handle_key_event(xd, kpev.detail, event_type, false);
+                event_type := ifx response_type == xcb.XCB_KEY_PRESS then XKB_Key_Event_Type.Press else .Release;
+                xkb_handle_key_event(d, ev.detail, event_type, false);
 
             case XCB_BUTTON_PRESS; #through;
             case XCB_BUTTON_RELEASE; {
                 ev := cast(*xcb.xcb_button_press_event_t) pending_event;
-                is_pressed : u32 = xx ifx response_type == xcb.XCB_BUTTON_PRESS then 1 else 0;
-                input_event: Input.Event;
-                input_event.type = .KEYBOARD;
-                input_event.key_pressed = is_pressed;
-                button := ev.detail;
-                if button == {
-                    case 1; input_event.key_code = .MOUSE_BUTTON_LEFT;
-                    case 2; input_event.key_code = .MOUSE_BUTTON_MIDDLE;
-                    case 3; input_event.key_code = .MOUSE_BUTTON_RIGHT;
-                }
-
-
-                if is_pressed {
-                    Input.input_button_states[input_event.key_code] = (Input.Key_Current_State.START | Input.Key_Current_State.DOWN);
-                } else {
-
-                    Input.input_button_states[input_event.key_code] = Input.Key_Current_State.END;
-                }
-                
-                array_add(*Input.events_this_frame, input_event);
-                // event_type := ifx response_type == XCB_BUTTON_PRESS then Button_Event_Type.Press else .Release;
-                // handle_button_event(xd, .Core, bpev.detail, event_type);
+                register_mouse_button_event(d, ev.detail, response_type == xcb.XCB_BUTTON_PRESS);
             }
             case;
                 // log("unhandled xcb event: % %", pending_event.response_type & ~0x80, pending_event.*);
         }
     }
+}
+
+register_mouse_button_event :: (display: *XCB_Display, button: u32, pressed: bool) {
+    event: Input.Event;
+    event.type = .KEYBOARD;
+    event.key_pressed = xx pressed;
+    if button == {
+        case 1; event.key_code = Input.Key_Code.MOUSE_BUTTON_LEFT;
+        case 2; event.key_code = Input.Key_Code.MOUSE_BUTTON_MIDDLE;
+        case 3; event.key_code = Input.Key_Code.MOUSE_BUTTON_RIGHT;
+
+        case 4; #through;
+        case 5;
+            event.type = .MOUSE_V_WHEEL;
+            event.typical_wheel_delta = DEFAULT_WHEEL_DELTA;
+            event.wheel_delta = DEFAULT_WHEEL_DELTA * (ifx (button & 0x01) then cast(s32) -1 else 1);
+            array_add(*Input.events_this_frame, event);
+            Input.mouse_wheel_delta.vertical += event.wheel_delta;
+            // For compat with built-in Input module. Probably need to extract it into some
+            // separate Input-compat module
+            Input.mouse_delta_z += event.wheel_delta;
+            return;
+
+        // case 6; #through;
+        // case 7;
+        //     event.type = .MOUSE_H_WHEEL;
+        //     event.typical_wheel_delta = WHEEL_DELTA;
+        //     event.wheel_delta = WHEEL_DELTA * (ifx (button & 0x01) then cast(s32) -1 else 1);
+        //     array_add(*display.base.events_this_frame, event);
+        //     xd.base.mouse_wheel_delta.horizontal += event.wheel_delta;
+        //     return;
+
+        // case 8; event.key_code = Input.Key_Code.MOUSE_BUTTON_X1;
+        // case 9; event.key_code = Input.Key_Code.MOUSE_BUTTON_X2;
+
+        case; return;
+    }
+
+    Input.input_button_states[event.key_code] =
+        ifx event.key_pressed then (Input.Key_Current_State.START | Input.Key_Current_State.DOWN)
+        else Input.Key_Current_State.END;
+
+    array_add(*Input.events_this_frame, event);
 }
 
 
@@ -429,7 +478,54 @@ set_utf8_property :: (window: *XCB_Window, property: xcb.xcb_atom_t, value: stri
 }
 
 
+#scope_module
+xcb_xkb: XCB_XKB_Symbols;
+
 #scope_file
+generic_c_call :: #type () #c_call;
+xcb_xkb_loaded := false;
+
+load_procs :: (procs: *$T, libnames: []string, loaded: *bool) -> success := false {
+    if loaded.* return true;
+
+    loaded.* = false;
+    for libname : libnames {
+        dlerror();
+        lib := dlopen(temp_c_string(libname), RTLD_NOW);
+        if !lib {
+            log_error("Failed to load %: %", libname, to_string(dlerror()));
+            continue;
+        }
+
+        tis := cast(*Type_Info_Struct) type_info(T);
+        for m : tis.members {
+            dlerror();
+            name := m.name;
+            if m.type.type == .PROCEDURE {
+                if m.flags & .CONSTANT continue;
+
+                pi := cast(*Type_Info_Procedure) m.type;
+                if !(pi.procedure_flags & .IS_C_CALL) continue;
+
+                ppfn := cast(*generic_c_call)((cast(*u8) procs) + m.offset_in_bytes);
+                ppfn.* = cast(generic_c_call) dlsym(lib, name.data);
+                if !ppfn.* {
+                    log_error("Failed to resolve function '%' in '%': %", name, libname, to_string(dlerror()));
+                    continue libname;
+                }
+            } else if m.type.type == .POINTER {
+                ppv := cast(**void)((cast(*u8) procs) + m.offset_in_bytes);
+                ppv.* = dlsym(lib, name.data);
+            }
+        }
+
+        log("XCB: loaded %", libname);
+        loaded.* = true;
+        return true;
+    }
+
+    return false;
+}
 
 #import "POSIX";
 

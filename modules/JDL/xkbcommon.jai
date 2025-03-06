@@ -1,307 +1,214 @@
-//
-// This file was auto-generated using the following command:
-//
-// jai generate.jai
-//
-
-
-
-XKB_KEYCODE_INVALID :: 0xffffffff;
-XKB_LAYOUT_INVALID :: 0xffffffff;
-XKB_LEVEL_INVALID :: 0xffffffff;
-XKB_MOD_INVALID :: 0xffffffff;
-XKB_LED_INVALID :: 0xffffffff;
-
-XKB_KEYCODE_MAX :: 0xffffffff - 1;
-
-XKB_KEYSYM_MAX :: 0x1fffffff;
-
-xkb_context :: struct {}
-
-xkb_keymap :: struct {}
-
-xkb_state :: struct {}
-
-xkb_keycode_t :: u32;
-
-xkb_keysym_t :: u32;
-
-xkb_layout_index_t :: u32;
-
-xkb_layout_mask_t :: u32;
-
-xkb_level_index_t :: u32;
-
-xkb_mod_index_t :: u32;
-
-xkb_mod_mask_t :: u32;
-
-xkb_led_index_t :: u32;
-
-xkb_led_mask_t :: u32;
-
-xkb_rule_names :: struct {
-    rules:   *u8;
-
-    model:   *u8;
-
-    layout:  *u8;
-
-    variant: *u8;
-
-    options: *u8;
+XKB_Key_Event_Type :: enum {
+    Press;
+    Release;
 }
 
-xkb_keysym_get_name :: (keysym: xkb_keysym_t, buffer: *u8, size: u64) -> s32 #foreign libxkbcommon;
+XKB_State :: struct {
+    event_base: u8;
 
-xkb_keysym_flags :: enum u32 {
-    NO_FLAGS         :: 0;
-    CASE_INSENSITIVE :: 1;
+    kb_context: *xkb_context;
+    kb_keymap : *xkb_keymap;
+    kb_state  : *xkb_state;
 
-    XKB_KEYSYM_NO_FLAGS         :: NO_FLAGS;
-    XKB_KEYSYM_CASE_INSENSITIVE :: CASE_INSENSITIVE;
+    kb_compose_table: *xkb_compose_table;
+    kb_compose_state: *xkb_compose_state;
+
+    mod_idx_shift     : u32;
+    mod_idx_ctrl      : u32;
+    mod_idx_alt       : u32;
+    mod_idx_caps_lock : u32;
+    mod_idx_super     : u32;
+    mod_idx_alt_gr    : u32;
+
+    mods_depressed : u32;
+    mods_latched   : u32;
+    mods_locked    : u32;
+    grp_depressed  : u32;
+    grp_latched    : u32;
+    grp_locked     : u32;
 }
 
-xkb_keysym_from_name :: (name: *u8, flags: xkb_keysym_flags) -> xkb_keysym_t #foreign libxkbcommon;
+xkb_state_init :: (d: *Base_Display, handle: *xcb_connection_t) -> bool {
+    state := *d.xkb_state;
 
-xkb_keysym_to_utf8 :: (keysym: xkb_keysym_t, buffer: *u8, size: u64) -> s32 #foreign libxkbcommon;
+    core_kb_id := xkb_x11_get_core_keyboard_device_id(handle);
+    if core_kb_id < 0 {
+        log_error("Failed to get device ID for core keyboard");
+        return false;
+    }
 
-xkb_keysym_to_utf32 :: (keysym: xkb_keysym_t) -> u32 #foreign libxkbcommon;
+    kb_context := xkb_context_new(.XKB_CONTEXT_NO_FLAGS);
+    kb_keymap  := xkb_x11_keymap_new_from_device(kb_context, handle, core_kb_id, .XKB_KEYMAP_COMPILE_NO_FLAGS);
+    kb_state   := xkb_x11_state_new_from_device(kb_keymap, handle, core_kb_id);
 
-xkb_utf32_to_keysym :: (ucs: u32) -> xkb_keysym_t #foreign libxkbcommon;
+    kb_compose_table := xkb_compose_table_new_from_locale(kb_context, setlocale(LC_ALL, null), .XKB_COMPOSE_COMPILE_NO_FLAGS);
+    kb_compose_state := xkb_compose_state_new(kb_compose_table, .XKB_COMPOSE_STATE_NO_FLAGS);
 
-xkb_keysym_to_upper :: (ks: xkb_keysym_t) -> xkb_keysym_t #foreign libxkbcommon;
+    mod_idx_shift     := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_SHIFT.data);
+    mod_idx_ctrl      := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_CTRL.data);
+    mod_idx_alt       := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_ALT.data);
+    mod_idx_caps_lock := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_CAPS.data);
+    mod_idx_super     := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_LOGO.data);
+    mod_idx_alt_gr    := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_ALT_GR.data);
 
-xkb_keysym_to_lower :: (ks: xkb_keysym_t) -> xkb_keysym_t #foreign libxkbcommon;
+    xkb_compose_state_unref(state.kb_compose_state);
+    xkb_compose_table_unref(state.kb_compose_table);
+    xkb_state_unref(state.kb_state);
+    xkb_keymap_unref(state.kb_keymap);
+    xkb_context_unref(state.kb_context);
 
-xkb_context_flags :: enum u32 {
-    NO_FLAGS             :: 0;
-    NO_DEFAULT_INCLUDES  :: 1;
-    NO_ENVIRONMENT_NAMES :: 2;
-    NO_SECURE_GETENV     :: 4;
+    state.kb_context = kb_context;
+    state.kb_keymap = kb_keymap;
+    state.kb_state = kb_state;
+    state.kb_compose_table = kb_compose_table;
+    state.kb_compose_state = kb_compose_state;
+    state.mod_idx_shift = mod_idx_shift;
+    state.mod_idx_ctrl = mod_idx_ctrl;
+    state.mod_idx_alt = mod_idx_alt;
+    state.mod_idx_caps_lock = mod_idx_caps_lock;
+    state.mod_idx_super = mod_idx_super;
+    state.mod_idx_alt_gr = mod_idx_alt_gr;
 
-    XKB_CONTEXT_NO_FLAGS             :: NO_FLAGS;
-    XKB_CONTEXT_NO_DEFAULT_INCLUDES  :: NO_DEFAULT_INCLUDES;
-    XKB_CONTEXT_NO_ENVIRONMENT_NAMES :: NO_ENVIRONMENT_NAMES;
-    XKB_CONTEXT_NO_SECURE_GETENV     :: NO_SECURE_GETENV;
+    xkb_finalize(state);
+
+    return true;
 }
 
-xkb_context_new :: (flags: xkb_context_flags) -> *xkb_context #foreign libxkbcommon;
+xkb_state_init :: (d: *Base_Display, keymap: *void) -> bool {
+    state := *d.xkb_state;
 
-xkb_context_ref :: (_context: *xkb_context) -> *xkb_context #foreign libxkbcommon;
+    kb_context := xkb_context_new(.XKB_CONTEXT_NO_FLAGS);
+    kb_keymap  := xkb_keymap_new_from_string(kb_context, keymap, .XKB_KEYMAP_FORMAT_TEXT_V1, .XKB_KEYMAP_COMPILE_NO_FLAGS);
+    kb_state   := xkb_state_new(kb_keymap);
 
-xkb_context_unref :: (_context: *xkb_context) -> void #foreign libxkbcommon;
+    kb_compose_table := xkb_compose_table_new_from_locale(kb_context, setlocale(LC_ALL, null), .XKB_COMPOSE_COMPILE_NO_FLAGS);
+    kb_compose_state := xkb_compose_state_new(kb_compose_table, .XKB_COMPOSE_STATE_NO_FLAGS);
 
-xkb_context_set_user_data :: (_context: *xkb_context, user_data: *void) -> void #foreign libxkbcommon;
+    mod_idx_shift     := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_SHIFT.data);
+    mod_idx_ctrl      := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_CTRL.data);
+    mod_idx_alt       := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_ALT.data);
+    mod_idx_caps_lock := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_CAPS.data);
+    mod_idx_super     := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_LOGO.data);
+    mod_idx_alt_gr    := xkb_keymap_mod_get_index(kb_keymap, XKB_MOD_NAME_ALT_GR.data);
 
-xkb_context_get_user_data :: (_context: *xkb_context) -> *void #foreign libxkbcommon;
+    xkb_compose_state_unref(state.kb_compose_state);
+    xkb_compose_table_unref(state.kb_compose_table);
+    xkb_state_unref(state.kb_state);
+    xkb_keymap_unref(state.kb_keymap);
+    xkb_context_unref(state.kb_context);
 
-xkb_context_include_path_append :: (_context: *xkb_context, path: *u8) -> s32 #foreign libxkbcommon;
+    state.kb_context = kb_context;
+    state.kb_keymap = kb_keymap;
+    state.kb_state = kb_state;
+    state.mod_idx_shift = mod_idx_shift;
+    state.mod_idx_ctrl = mod_idx_ctrl;
+    state.mod_idx_alt = mod_idx_alt;
+    state.mod_idx_caps_lock = mod_idx_caps_lock;
+    state.mod_idx_super = mod_idx_super;
+    state.mod_idx_alt_gr = mod_idx_alt_gr;
+    state.kb_compose_table = kb_compose_table;
+    state.kb_compose_state = kb_compose_state;
 
-xkb_context_include_path_append_default :: (_context: *xkb_context) -> s32 #foreign libxkbcommon;
+    xkb_finalize(state);
 
-xkb_context_include_path_reset_defaults :: (_context: *xkb_context) -> s32 #foreign libxkbcommon;
-
-xkb_context_include_path_clear :: (_context: *xkb_context) -> void #foreign libxkbcommon;
-
-xkb_context_num_include_paths :: (_context: *xkb_context) -> u32 #foreign libxkbcommon;
-
-xkb_context_include_path_get :: (_context: *xkb_context, index: u32) -> *u8 #foreign libxkbcommon;
-
-xkb_log_level :: enum u32 {
-    CRITICAL :: 10;
-    ERROR    :: 20;
-    WARNING  :: 30;
-    INFO     :: 40;
-    DEBUG    :: 50;
-
-    XKB_LOG_LEVEL_CRITICAL :: CRITICAL;
-    XKB_LOG_LEVEL_ERROR    :: ERROR;
-    XKB_LOG_LEVEL_WARNING  :: WARNING;
-    XKB_LOG_LEVEL_INFO     :: INFO;
-    XKB_LOG_LEVEL_DEBUG    :: DEBUG;
+    return true;
 }
 
-xkb_context_set_log_level :: (_context: *xkb_context, level: xkb_log_level) -> void #foreign libxkbcommon;
-
-xkb_context_get_log_level :: (_context: *xkb_context) -> xkb_log_level #foreign libxkbcommon;
-
-xkb_context_set_log_verbosity :: (_context: *xkb_context, verbosity: s32) -> void #foreign libxkbcommon;
-
-xkb_context_get_log_verbosity :: (_context: *xkb_context) -> s32 #foreign libxkbcommon;
-
-xkb_context_set_log_fn :: (_context: *xkb_context, log_fn: #type (_context: *xkb_context, level: xkb_log_level, format: *u8, args: *void) -> void #c_call) -> void #foreign libxkbcommon;
-
-xkb_keymap_compile_flags :: enum u32 {
-    XKB_KEYMAP_COMPILE_NO_FLAGS :: 0;
+xkb_state_set_mods :: inline (d: *Base_Display,
+    mods_depressed: u32, mods_latched: u32, mods_locked: u32,
+    grp_depressed: u32, grp_latched: u32, grp_locked: u32) #c_call
+{
+    state := *d.xkb_state;
+    state.mods_depressed = mods_depressed;
+    state.mods_latched   = mods_latched;
+    state.mods_locked    = mods_locked;
+    state.grp_depressed  = grp_depressed;
+    state.grp_latched    = grp_latched;
+    state.grp_locked     = grp_locked;
 }
 
-xkb_keymap_new_from_names :: (_context: *xkb_context, names: *xkb_rule_names, flags: xkb_keymap_compile_flags) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_keymap_format :: enum u32 {
-    XKB_KEYMAP_FORMAT_TEXT_V1 :: 1;
+xkb_state_set_mods :: inline (d: *Base_Display, depressed: u32, latched: u32, locked: u32, group: u32) #c_call {
+    xkb_state_set_mods(d, depressed, latched, locked, group, group, group);
 }
 
-// xkb_keymap_new_from_file :: (_context: *xkb_context, file: *FILE, format: xkb_keymap_format, flags: xkb_keymap_compile_flags) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_keymap_new_from_string :: (_context: *xkb_context, _string: *u8, format: xkb_keymap_format, flags: xkb_keymap_compile_flags) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_keymap_new_from_buffer :: (_context: *xkb_context, buffer: *u8, length: u64, format: xkb_keymap_format, flags: xkb_keymap_compile_flags) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_keymap_ref :: (keymap: *xkb_keymap) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_keymap_unref :: (keymap: *xkb_keymap) -> void #foreign libxkbcommon;
-
-xkb_keymap_get_as_string :: (keymap: *xkb_keymap, format: xkb_keymap_format) -> *u8 #foreign libxkbcommon;
-
-xkb_keymap_min_keycode :: (keymap: *xkb_keymap) -> xkb_keycode_t #foreign libxkbcommon;
-
-xkb_keymap_max_keycode :: (keymap: *xkb_keymap) -> xkb_keycode_t #foreign libxkbcommon;
-
-xkb_keymap_key_iter_t :: #type (keymap: *xkb_keymap, key: xkb_keycode_t, data: *void) -> void #c_call;
-
-xkb_keymap_key_for_each :: (keymap: *xkb_keymap, iter: xkb_keymap_key_iter_t, data: *void) -> void #foreign libxkbcommon;
-
-xkb_keymap_key_get_name :: (keymap: *xkb_keymap, key: xkb_keycode_t) -> *u8 #foreign libxkbcommon;
-
-xkb_keymap_key_by_name :: (keymap: *xkb_keymap, name: *u8) -> xkb_keycode_t #foreign libxkbcommon;
-
-xkb_keymap_num_mods :: (keymap: *xkb_keymap) -> xkb_mod_index_t #foreign libxkbcommon;
-
-xkb_keymap_mod_get_name :: (keymap: *xkb_keymap, idx: xkb_mod_index_t) -> *u8 #foreign libxkbcommon;
-
-xkb_keymap_mod_get_index :: (keymap: *xkb_keymap, name: *u8) -> xkb_mod_index_t #foreign libxkbcommon;
-
-xkb_keymap_num_layouts :: (keymap: *xkb_keymap) -> xkb_layout_index_t #foreign libxkbcommon;
-
-xkb_keymap_layout_get_name :: (keymap: *xkb_keymap, idx: xkb_layout_index_t) -> *u8 #foreign libxkbcommon;
-
-xkb_keymap_layout_get_index :: (keymap: *xkb_keymap, name: *u8) -> xkb_layout_index_t #foreign libxkbcommon;
-
-xkb_keymap_num_leds :: (keymap: *xkb_keymap) -> xkb_led_index_t #foreign libxkbcommon;
-
-xkb_keymap_led_get_name :: (keymap: *xkb_keymap, idx: xkb_led_index_t) -> *u8 #foreign libxkbcommon;
-
-xkb_keymap_led_get_index :: (keymap: *xkb_keymap, name: *u8) -> xkb_led_index_t #foreign libxkbcommon;
-
-xkb_keymap_num_layouts_for_key :: (keymap: *xkb_keymap, key: xkb_keycode_t) -> xkb_layout_index_t #foreign libxkbcommon;
-
-xkb_keymap_num_levels_for_key :: (keymap: *xkb_keymap, key: xkb_keycode_t, layout: xkb_layout_index_t) -> xkb_level_index_t #foreign libxkbcommon;
-
-xkb_keymap_key_get_mods_for_level :: (keymap: *xkb_keymap, key: xkb_keycode_t, layout: xkb_layout_index_t, level: xkb_level_index_t, masks_out: *xkb_mod_mask_t, masks_size: u64) -> u64 #foreign libxkbcommon;
-
-xkb_keymap_key_get_syms_by_level :: (keymap: *xkb_keymap, key: xkb_keycode_t, layout: xkb_layout_index_t, level: xkb_level_index_t, syms_out: **xkb_keysym_t) -> s32 #foreign libxkbcommon;
-
-xkb_keymap_key_repeats :: (keymap: *xkb_keymap, key: xkb_keycode_t) -> s32 #foreign libxkbcommon;
-
-xkb_state_new :: (keymap: *xkb_keymap) -> *xkb_state #foreign libxkbcommon;
-
-xkb_state_ref :: (state: *xkb_state) -> *xkb_state #foreign libxkbcommon;
-
-xkb_state_unref :: (state: *xkb_state) -> void #foreign libxkbcommon;
-
-xkb_state_get_keymap :: (state: *xkb_state) -> *xkb_keymap #foreign libxkbcommon;
-
-xkb_key_direction :: enum u32 {
-    UP   :: 0;
-    DOWN :: 1;
-
-    XKB_KEY_UP   :: UP;
-    XKB_KEY_DOWN :: DOWN;
+xkb_state_apply_mods :: inline (d: *Base_Display) #c_call {
+    state := *d.xkb_state;
+    xkb_state_update_mask(
+        state.kb_state,
+        state.mods_depressed, state.mods_latched, state.mods_locked,
+        state.grp_depressed, state.grp_latched, state.grp_locked);
 }
 
-xkb_state_component :: enum u32 {
-    MODS_DEPRESSED   :: 1;
-    MODS_LATCHED     :: 2;
-    MODS_LOCKED      :: 4;
-    MODS_EFFECTIVE   :: 8;
-    LAYOUT_DEPRESSED :: 16;
-    LAYOUT_LATCHED   :: 32;
-    LAYOUT_LOCKED    :: 64;
-    LAYOUT_EFFECTIVE :: 128;
-    LEDS             :: 256;
+xkb_handle_key_event :: (d: *Base_Display, keycode: u32, event_type: XKB_Key_Event_Type, repeat: bool) -> *Input.Event {
+    state := *d.xkb_state;
+    xkb_state_apply_mods(d);
 
-    XKB_STATE_MODS_DEPRESSED   :: MODS_DEPRESSED;
-    XKB_STATE_MODS_LATCHED     :: MODS_LATCHED;
-    XKB_STATE_MODS_LOCKED      :: MODS_LOCKED;
-    XKB_STATE_MODS_EFFECTIVE   :: MODS_EFFECTIVE;
-    XKB_STATE_LAYOUT_DEPRESSED :: LAYOUT_DEPRESSED;
-    XKB_STATE_LAYOUT_LATCHED   :: LAYOUT_LATCHED;
-    XKB_STATE_LAYOUT_LOCKED    :: LAYOUT_LOCKED;
-    XKB_STATE_LAYOUT_EFFECTIVE :: LAYOUT_EFFECTIVE;
-    XKB_STATE_LEDS             :: LEDS;
+    utf32: u32;
+    is_printable: bool;
+    keysym := xkb_state_key_get_one_sym(state.kb_state, keycode);
+
+    ji_event: Input.Event;
+    ji_event.type = .KEYBOARD;
+    ji_event.shift_pressed    = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_shift, .XKB_STATE_MODS_EFFECTIVE) == 1;
+    ji_event.ctrl_pressed     = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_ctrl,  .XKB_STATE_MODS_EFFECTIVE) == 1;
+    ji_event.alt_pressed      = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_alt,   .XKB_STATE_MODS_EFFECTIVE) == 1;
+    ji_event.cmd_meta_pressed = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_super, .XKB_STATE_MODS_EFFECTIVE) == 1;
+
+    if event_type == .Press {
+        xkb_compose_state_feed(state.kb_compose_state, keysym);
+
+        status := xkb_compose_state_get_status(state.kb_compose_state);
+        if status == .XKB_COMPOSE_COMPOSED || status == .XKB_COMPOSE_CANCELLED {
+            keysym = xkb_compose_state_get_one_sym(state.kb_compose_state);
+            xkb_compose_state_reset(state.kb_compose_state);
+        }
+
+        utf32 = xkb_keysym_to_utf32(keysym);
+        is_printable = ((utf32 >= 32) && (utf32 != 127));
+
+        ji_event.key_pressed = 1;
+        ji_event.key_code = ifx xkb_is_plus(state, keycode) then cast(Input.Key_Code)(#char "+") else x11_translate_key_code(keysym);
+        ji_event.text_input_count = xx is_printable;
+        Input.input_button_states[ji_event.key_code] = (Input.Key_Current_State.START | Input.Key_Current_State.DOWN);
+    } else {
+        ji_event.key_pressed = 0;
+        ji_event.key_code = x11_translate_key_code(keysym);
+        Input.input_button_states[ji_event.key_code] = Input.Key_Current_State.END;
+    }
+    ji_event.repeat = repeat;
+
+    if ji_event.key_code == {
+        case .SHIFT; ji_event.shift_pressed = true;
+        case .CTRL;  ji_event.ctrl_pressed = true;
+        case .ALT;   ji_event.alt_pressed = true;
+        case .META;  ji_event.cmd_meta_pressed = true;
+    }
+
+    array_add(*Input.events_this_frame, ji_event);
+    idx := Input.events_this_frame.count - 1;
+
+    if ji_event.key_pressed && is_printable {
+        text_event: Input.Event;
+        text_event.type = .TEXT_INPUT;
+        text_event.key_pressed = 1;
+        text_event.key_code = ji_event.key_code;
+        text_event.utf32 = utf32;
+        array_add(*Input.events_this_frame, text_event);
+    }
+
+    return *Input.events_this_frame[idx];
 }
 
-xkb_state_update_key :: (state: *xkb_state, key: xkb_keycode_t, direction: xkb_key_direction) -> xkb_state_component #foreign libxkbcommon;
-
-xkb_state_update_mask :: (state: *xkb_state, depressed_mods: xkb_mod_mask_t, latched_mods: xkb_mod_mask_t, locked_mods: xkb_mod_mask_t, depressed_layout: xkb_layout_index_t, latched_layout: xkb_layout_index_t, locked_layout: xkb_layout_index_t) -> xkb_state_component #foreign libxkbcommon;
-
-xkb_state_key_get_syms :: (state: *xkb_state, key: xkb_keycode_t, syms_out: **xkb_keysym_t) -> s32 #foreign libxkbcommon;
-
-xkb_state_key_get_utf8 :: (state: *xkb_state, key: xkb_keycode_t, buffer: *u8, size: u64) -> s32 #foreign libxkbcommon;
-
-xkb_state_key_get_utf32 :: (state: *xkb_state, key: xkb_keycode_t) -> u32 #foreign libxkbcommon;
-
-xkb_state_key_get_one_sym :: (state: *xkb_state, key: xkb_keycode_t) -> xkb_keysym_t #foreign libxkbcommon;
-
-xkb_state_key_get_layout :: (state: *xkb_state, key: xkb_keycode_t) -> xkb_layout_index_t #foreign libxkbcommon;
-
-xkb_state_key_get_level :: (state: *xkb_state, key: xkb_keycode_t, layout: xkb_layout_index_t) -> xkb_level_index_t #foreign libxkbcommon;
-
-xkb_state_match :: enum u32 {
-    ANY           :: 1;
-    ALL           :: 2;
-    NON_EXCLUSIVE :: 65536;
-
-    XKB_STATE_MATCH_ANY           :: ANY;
-    XKB_STATE_MATCH_ALL           :: ALL;
-    XKB_STATE_MATCH_NON_EXCLUSIVE :: NON_EXCLUSIVE;
+xkb_finalize :: (state: *XKB_State) #expand {
 }
 
-xkb_state_serialize_mods :: (state: *xkb_state, components: xkb_state_component) -> xkb_mod_mask_t #foreign libxkbcommon;
-
-xkb_state_serialize_layout :: (state: *xkb_state, components: xkb_state_component) -> xkb_layout_index_t #foreign libxkbcommon;
-
-xkb_state_mod_name_is_active :: (state: *xkb_state, name: *u8, type: xkb_state_component) -> s32 #foreign libxkbcommon;
-
-xkb_state_mod_names_are_active :: (state: *xkb_state, type: xkb_state_component, match: xkb_state_match, __args: ..Any) -> s32 #foreign libxkbcommon;
-
-xkb_state_mod_index_is_active :: (state: *xkb_state, idx: xkb_mod_index_t, type: xkb_state_component) -> s32 #foreign libxkbcommon;
-
-xkb_state_mod_indices_are_active :: (state: *xkb_state, type: xkb_state_component, match: xkb_state_match, __args: ..Any) -> s32 #foreign libxkbcommon;
-
-xkb_consumed_mode :: enum u32 {
-    XKB :: 0;
-    GTK :: 1;
-
-    XKB_CONSUMED_MODE_XKB :: XKB;
-    XKB_CONSUMED_MODE_GTK :: GTK;
+xkb_is_plus :: (state: *XKB_State, keycode: u32) -> bool #expand {
+    return false;
 }
-
-xkb_state_key_get_consumed_mods2 :: (state: *xkb_state, key: xkb_keycode_t, mode: xkb_consumed_mode) -> xkb_mod_mask_t #foreign libxkbcommon;
-
-xkb_state_key_get_consumed_mods :: (state: *xkb_state, key: xkb_keycode_t) -> xkb_mod_mask_t #foreign libxkbcommon;
-
-xkb_state_mod_index_is_consumed2 :: (state: *xkb_state, key: xkb_keycode_t, idx: xkb_mod_index_t, mode: xkb_consumed_mode) -> s32 #foreign libxkbcommon;
-
-xkb_state_mod_index_is_consumed :: (state: *xkb_state, key: xkb_keycode_t, idx: xkb_mod_index_t) -> s32 #foreign libxkbcommon;
-
-xkb_state_mod_mask_remove_consumed :: (state: *xkb_state, key: xkb_keycode_t, mask: xkb_mod_mask_t) -> xkb_mod_mask_t #foreign libxkbcommon;
-
-xkb_state_layout_name_is_active :: (state: *xkb_state, name: *u8, type: xkb_state_component) -> s32 #foreign libxkbcommon;
-
-xkb_state_layout_index_is_active :: (state: *xkb_state, idx: xkb_layout_index_t, type: xkb_state_component) -> s32 #foreign libxkbcommon;
-
-xkb_state_led_name_is_active :: (state: *xkb_state, name: *u8) -> s32 #foreign libxkbcommon;
-
-xkb_state_led_index_is_active :: (state: *xkb_state, idx: xkb_led_index_t) -> s32 #foreign libxkbcommon;
-
-xkb_x11_setup_xkb_extension :: (xcb_connection: *void, xkb_major_version: u16, xkb_minor_version: u16, flags: u32, xkb_major_version_out: *u16, xkb_minor_version_out: *u16, base_event_out: *u8, base_error_out: *u8) -> s32 #foreign libxkbcommon_x11;
-xkb_x11_get_core_keyboard_device_id :: (xcb_connection: *void) -> s32 #foreign libxkbcommon_x11;
-xkb_x11_keymap_new_from_device :: (ctx: *xkb_context, xkb_connection: *void, device_id: s32, flags: xkb_keymap_compile_flags) -> *xkb_keymap #foreign libxkbcommon_x11;
-xkb_x11_state_new_from_device :: (keymap: *xkb_keymap, xcb_connection: *void, device_id: s32) -> *xkb_state #foreign libxkbcommon_x11;
 
 #scope_file
 
-libxkbcommon :: #library,system "libxkbcommon";
-libxkbcommon_x11 :: #library,system "libxkbcommon-x11";
+// Storing setlocale bindings right here, because hopefully X11 module is the only place they will ever be needed in.
+// This whole setlocale API is very-very old and bad, and only ancient software (such as libX11) relies on it.
+LC_ALL : s32 : 6;
+setlocale :: (what: s32, loc: *u8) -> *u8 #foreign libc;
