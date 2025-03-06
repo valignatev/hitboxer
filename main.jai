@@ -714,7 +714,7 @@ main :: () {
     active_profile = active_profile_in_ui;
 
     // TODO: Need to separate detecting focused program and setting up keyboard hook. Probably...
-    start_detecting_focused_program();
+    // start_detecting_focused_program();
 
     // start_logging_keys();
 
@@ -746,7 +746,8 @@ main :: () {
         if !need_to_rerender {
             need_to_rerender = platform_wait_for_message();
         }
-        // Input.update_window_events();
+
+        JDL.update_window_events();
  
         for Input.get_window_resizes() {
             Simp.update_window(it.window);

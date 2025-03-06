@@ -14,6 +14,7 @@ _main_display: Display;
 #scope_module
 
 #import "Basic";
+Input :: #import "Input";
 
 DEFAULT_WINDOW_CREATION_COLOR :: float.[.15,.15,.2];
 
@@ -41,6 +42,7 @@ Base_Display :: struct {
         background_color_rgb: [3]float = DEFAULT_WINDOW_CREATION_COLOR) -> bool;
 
     wait_for_events: #type (display: *Display);
+    update_window_events: #type (display: *Display);
 
     get_dimensions: #type (
         window: *Window,
@@ -62,9 +64,13 @@ Base_Window :: struct {
     display: *Display;
     window_minimized := false;
 
+    has_native_handle: #type (window: *Window, native_handle: *void) -> bool;
+
     get_mouse_pointer_position: #type (
         display: *Window,
         right_handed := false) -> x: s32, y: s32, success: bool;
+
+    set_window_title: #type (window: *Window, title: string);
 }
 
 
@@ -131,9 +137,52 @@ get_mouse_pointer_position :: inline (right_handed: bool) -> x: int, y: int, suc
     return xx x, xx y, s;
 }
 
+set_window_titile :: inline (window: *Window, title: string) {
+    window.base.set_window_title(window, title);
+}
 
 wait_for_events :: inline () {
     main_display.wait_for_events(main_display);
+}
+
+update_window_events :: inline () {
+    Input.input_per_frame_event_and_flag_update();
+    main_display.update_window_events(main_display);
+}
+
+
+get_by_native_handle :: inline (display: *Display, native_handle: *void) -> *Window {
+    bd: *Base_Display = display;
+    for bd.windows {
+        bw: *Base_Window = it;
+        if bw.has_native_handle(it, native_handle) return it;
+    }
+    return INVALID_WINDOW;
+}
+
+has_native_handle :: inline (window: *Window, native_handle: *void) -> bool {
+    bw: *Base_Window = window;
+    return bw.has_native_handle(window, native_handle);
+}
+
+
+add_resize_record :: (hwnd: Window_Type, width: s32, height: s32) {
+    record: *Input.Window_Resize_Record;
+
+    for * Input.pending_resizes {
+        if it.window == hwnd {
+            record = it;
+            break;
+        }
+    }
+
+    if !record {
+        record = array_add(*Input.pending_resizes);
+    }
+
+    record.window = hwnd;
+    record.width = width;
+    record.height = height;
 }
 
 
