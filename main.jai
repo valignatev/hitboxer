@@ -1176,7 +1176,6 @@ draw_one_frame :: (dt: float, window: *Window) {
     }
     if GetRect.active_widget {
         w := GetRect.active_widget;
-        print("%\n", w.*);
         need_to_rerender = true;
     }
 }
