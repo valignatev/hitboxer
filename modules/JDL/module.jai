@@ -4,14 +4,13 @@
     #load "windows.jai";
 } else #if OS == .LINUX {
     #load "xcb_window.jai";
+    #load "xkbcommon.jai";
 } else {
     #assert(false);
 }
 
-#scope_file
-_main_display: Display;
-
 #scope_module
+DEFAULT_WHEEL_DELTA :: 120;
 
 #import "Basic";
 Input :: #import "Input";
@@ -38,11 +37,13 @@ Base_Display :: struct {
         width: s32, height: s32,
         window_name: string,
         window_x := 0, window_y := 0,
+        window_class: string = "JDL-jai-application",
         parent: *Window = null,
         background_color_rgb: [3]float = DEFAULT_WINDOW_CREATION_COLOR) -> bool;
 
     wait_for_events: #type (display: *Display);
     update_window_events: #type (display: *Display);
+    translate_key_code: #type (key: u64) -> Input.Key_Code;
 
     get_dimensions: #type (
         window: *Window,
@@ -51,6 +52,10 @@ Base_Display :: struct {
     get_mouse_pointer_position: #type (
         display: *Display,
         right_handed := false) -> x: s32, y: s32, success: bool;
+
+    #if OS == .LINUX {
+        xkb_state: XKB_State;
+    }
 }
 
 
@@ -100,14 +105,15 @@ JDL_init :: () -> success: bool {
 }
 
 
-create_window :: (window_width: s32, window_height: s32, window_title: string) -> Window_Type {
+create_window :: (window_width: s32, window_height: s32, window_title: string, x: s32 = 0, y: s32 = 0, window_class: string = "JDL-jai-application") -> Window_Type {
     window := New(Window);
     success := main_display.create_window(
         main_display,
         window,
-        window_width,
-        window_height,
-        window_title
+        window_width, window_height,
+        window_title,
+        x, y,
+        window_class,
     );
 
     if !success {
@@ -150,6 +156,14 @@ update_window_events :: inline () {
     main_display.update_window_events(main_display);
 }
 
+translate_key_code :: inline (key: u64) -> Input.Key_Code {
+    bd: *Base_Display = main_display;
+    return bd.translate_key_code(key);
+}
+
+// translate_key_code :: inline (display: *Display, key: u64) -> Input.Key_Code {
+//     return display.base.translate_key_code(key);
+// }
 
 get_by_native_handle :: inline (display: *Display, native_handle: *void) -> *Window {
     bd: *Base_Display = display;
@@ -190,6 +204,7 @@ Window_Type :: *Window;
 INVALID_WINDOW : Window_Type : null;
 
 #scope_file
-// Basic :: #import "Basic";
+_main_display: Display;
+
 #import "Hash_Table";
 

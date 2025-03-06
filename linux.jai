@@ -1,4 +1,4 @@
-// #import,file "./modules/JDL/xcb.jai";
+#import "libxkbcommon";
 #load "./uinput.jai";
 #load "./libinput.jai";
 #load "./libudev.jai";
@@ -410,8 +410,8 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
             // even take advantage of that, because numpad keys are specialcased in get_key_name anyway
             // So maybe we don't even need to update the state at all. At least until we have a proper
             // keyboard layouts/localization support.
-            xkb_keycode: xkb.xkb_keycode_t = XKB_EVDEV_OFFSET + key;
-            xkb.xkb_state_update_key(JDL.main_display.xcb.xkb_state, xkb_keycode, xx state);
+            xkb_keycode: xkb_keycode_t = XKB_EVDEV_OFFSET + key;
+            xkb_state_update_key(JDL.main_display.base.xkb_state.kb_state, xkb_keycode, xx state);
         }
 
         if key == KEY_NUMLOCK return;
@@ -631,25 +631,25 @@ get_key_name :: (key_scan_code: u32) -> string {
 
     key_name: string;
 
-    xkb_keycode: xkb.xkb_keycode_t = XKB_EVDEV_OFFSET + key_scan_code;
-    keysym := xkb.xkb_state_key_get_one_sym(JDL.main_display.xcb.xkb_state, xkb_keycode);
+    xkb_keycode: xkb_keycode_t = XKB_EVDEV_OFFSET + key_scan_code;
+    keysym := xkb_state_key_get_one_sym(JDL.main_display.xcb.xkb_state.kb_state, xkb_keycode);
     // This doesn't do anything for some reason
-    keysym = xkb.xkb_keysym_to_upper(keysym);
+    keysym = xkb_keysym_to_upper(keysym);
 
     // First is a dummy call just to get a length of the string
-    length := xkb.xkb_state_key_get_utf8(JDL.main_display.xcb.xkb_state, xkb_keycode, null, 0);
+    length := xkb_state_key_get_utf8(JDL.main_display.xcb.xkb_state.kb_state, xkb_keycode, null, 0);
     if length {
         // Allocate one more for that sweet null terminator. We'll subtract the count later
         key_name = alloc_string(length + 1);
-        xkb.xkb_state_key_get_utf8(JDL.main_display.xcb.xkb_state, xkb_keycode, key_name.data, xx (key_name.count));
+        xkb_state_key_get_utf8(JDL.main_display.xcb.xkb_state.kb_state, xkb_keycode, key_name.data, xx (key_name.count));
 
     // If the key doesn't have utf8 representation in libxkbcommon (or it's a whitespace character) - get its keysym name instead.
     }
     // -1 to account for trailing null character
     if !length || !(trim(key_name).count - 1) {
-        length := xkb.xkb_keysym_get_name(keysym, null, 0);
+        length := xkb_keysym_get_name(keysym, null, 0);
         key_name = alloc_string(length + 1);
-        xkb.xkb_keysym_get_name(keysym, key_name.data, xx key_name.count);
+        xkb_keysym_get_name(keysym, key_name.data, xx key_name.count);
     }
 
     key_name.count -= 1;

@@ -660,7 +660,13 @@ main :: () {
     }
     defer file_close(*log_file);
 
-    current_program_state = .{active_state=.NOTHING, next_state=.NOTHING, active_mapping=null, active_search=*dummy_input_text_state};
+    current_program_state = .{
+        active_state=.NOTHING,
+        next_state=.NOTHING,
+        active_mapping=null,
+        active_search=*dummy_input_text_state,
+        need_to_rerender=true,
+    };
     using current_program_state;
 
     success_init, init_reason := platform_init();
@@ -694,7 +700,7 @@ main :: () {
         immediate_flush            = Simp.immediate_flush,
     };
 
-    the_window = create_window(window_width, window_height, "Hitboxer v0.12");
+    the_window = create_window(window_width, window_height, "Hitboxer v0.12", window_class="hitboxer");
 
     // I want to init everything after the Window, because if there's an error, I want to potentially
     // show it in the window, instead of yelling in the terminal like some pussy ass Linux nerd.

@@ -16,11 +16,12 @@ Event_Type :: enum u32 {  // If we set this to u8, our packing will stop matchin
     KEYBOARD    :: 1;
     TEXT_INPUT  :: 2;
     WINDOW      :: 3;
-    MOUSE_WHEEL :: 4;
-    QUIT        :: 5;
-    DRAG_AND_DROP_FILES :: 6;
-    TOUCH       :: 7;
-    WINDOW_CLOSE :: 8;
+    MOUSE_V_WHEEL :: 4;
+    MOUSE_H_WHEEL :: 5;
+    QUIT        :: 6;
+    DRAG_AND_DROP_FILES :: 7;
+    TOUCH       :: 8;
+    WINDOW_CLOSE :: 9;
 }
 
 Key_Current_State :: enum_flags u32 {
@@ -99,6 +100,23 @@ Key_Code :: enum u32 {
     F24;
 
     PRINT_SCREEN;
+
+    NUMPAD_0;
+    NUMPAD_1;
+    NUMPAD_2;
+    NUMPAD_3;
+    NUMPAD_4;
+    NUMPAD_5;
+    NUMPAD_6;
+    NUMPAD_7;
+    NUMPAD_8;
+    NUMPAD_9;
+    NUMPAD_MULTIPLY;
+    NUMPAD_DIVIDE;
+    NUMPAD_ADD;
+    NUMPAD_SUBTRACT;
+    NUMPAD_DECIMAL;
+    NUMPAD_ENTER;
 
     MOUSE_BUTTON_LEFT;
     MOUSE_BUTTON_MIDDLE;
@@ -179,9 +197,16 @@ Event :: struct {
 }
 
 // Per-frame mouse deltas:
+Wheel_Delta :: struct {
+    vertical: s32;
+    horizontal: s32;
+}
+
 mouse_delta_x: int;
 mouse_delta_y: int;
 mouse_delta_z: int;
+
+mouse_wheel_delta: Wheel_Delta;
 
 events_this_frame:   [..] Event;
 
