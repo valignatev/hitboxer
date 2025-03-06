@@ -392,7 +392,6 @@ xcb_update_window_events :: (display: *Display) {
                 input_event.type = .KEYBOARD;
                 input_event.key_pressed = is_pressed;
                 button := ev.detail;
-                print("mouse %: %\n", input_event.key_pressed, button);
                 if button == {
                     case 1; input_event.key_code = .MOUSE_BUTTON_LEFT;
                     case 2; input_event.key_code = .MOUSE_BUTTON_MIDDLE;
