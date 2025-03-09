@@ -27,8 +27,6 @@ build :: () {
         }
     }
 
-    remap_import(w, "", "Input", "");
-    remap_import(w, "", "Window_Type", "");
     set_build_options(target_options, w);
 
     #if OS == .WINDOWS {

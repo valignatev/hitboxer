@@ -53,6 +53,7 @@ Base_Display :: struct {
         display: *Display,
         right_handed := false) -> x: s32, y: s32, success: bool;
 
+    // xkb_state is on the base window because it's common for X11 and Wayland
     #if OS == .LINUX {
         xkb_state: XKB_State;
     }
