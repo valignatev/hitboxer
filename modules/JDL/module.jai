@@ -44,7 +44,6 @@ Base_Display :: struct {
     wait_for_events: #type (display: *Display);
     update_window_events: #type (display: *Display);
     translate_key_code: #type (key: u64) -> Input.Key_Code;
-
     get_dimensions: #type (
         window: *Window,
         right_handed: bool) -> x: s32, y: s32, width: s32, height: s32, success: bool;
@@ -77,6 +76,7 @@ Base_Window :: struct {
         right_handed := false) -> x: s32, y: s32, success: bool;
 
     set_window_title: #type (window: *Window, title: string);
+    finalize_present: #type (window: *Window);
 }
 
 
@@ -198,6 +198,10 @@ add_resize_record :: (hwnd: Window_Type, width: s32, height: s32) {
     record.window = hwnd;
     record.width = width;
     record.height = height;
+}
+
+finalize_present :: inline (window: *Window) {
+    window.base.finalize_present(window);
 }
 
 

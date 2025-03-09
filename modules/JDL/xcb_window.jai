@@ -62,7 +62,7 @@ toggle_fullscreen :: (win: Window, desire_fullscreen: bool, saved: *Saved_Window
 xcb_init_display :: (display: *Display) -> bool {
     if !load_xcb() return false;
     if !xkbcommon_load(init_xcb_compat=true) return false;
-    
+
     d := XCB_Display.{ base = display };
     d.base.type = XCB_Display;
     d.base.create_window = xcb_create_window;
@@ -71,7 +71,7 @@ xcb_init_display :: (display: *Display) -> bool {
     d.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
     d.base.update_window_events = xcb_update_window_events;
     d.base.translate_key_code  = x11_translate_key_code;
-    
+
     d.handle = xcb_connect(null, null);
     con_errors := xcb_connection_has_error(d.handle);
 
@@ -133,7 +133,7 @@ xcb_init_display :: (display: *Display) -> bool {
 
         if (!ret) {
             log_error("Couldn't setup XKB extension\n");
-            return false; 
+            return false;
         }
         log("XCB: xcb-xkb version %.%", xkb_major, xkb_minor);
 
@@ -162,11 +162,11 @@ xcb_init_display :: (display: *Display) -> bool {
     // xcb_sync
     {
         sync_ext := xcb_get_extension_data(d.handle, xcb_sync.id);
-        
+
         // print("%\n", formatStruct(sync_ext, 1, true));
         if (!sync_ext.present) {
             log_error("SYNC is not present on this X11 server, install a better distro");
-            return false; 
+            return false;
         }
 
         init_error: *xcb_generic_error_t;
@@ -207,6 +207,7 @@ xcb_create_window :: (
     window_ret.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
     window_ret.base.set_window_title = xcb_set_window_title;
     window_ret.base.has_native_handle = xcb_has_native_handle;
+    window_ret.base.finalize_present = xcb_finalize_present;
 
     to_u16 :: (f: float) -> u16 #expand {
         u := clamp(cast(s32)(f * 65535), 0, 65535);
@@ -225,11 +226,12 @@ xcb_create_window :: (
     event_mask := xcb_event_mask_t.EXPOSURE | .STRUCTURE_NOTIFY | .FOCUS_CHANGE | .ENTER_WINDOW | .LEAVE_WINDOW | .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE | .POINTER_MOTION;
     window := xcb_generate_id(d.handle);
     window_ret.xcb.handle = window;
-    prop_mask := xcb_cw_t.BACK_PIXEL | .EVENT_MASK; // | .BIT_GRAVITY;
+    prop_mask := xcb_cw_t.EVENT_MASK; // | .WIN_GRAVITY; //  | .BIT_GRAVITY;
+    // prop_mask := xcb_cw_t.BACK_PIXEL | .EVENT_MASK;
     prop_list := u32.[
-        screen.black_pixel,
+        // screen.white_pixel,
         xx event_mask,
-        // xx xcb_gravity_t.STATIC,
+        // xx xcb_gravity_t.NORTH_WEST
     ];
 
     window_cookie := xcb_create_window_checked(
@@ -251,8 +253,15 @@ xcb_create_window :: (
         .REPLACE,
         window,
         d.atoms.WM_PROTOCOLS,
-        xx xcb_atom_enum_t.ATOM, 
+        xx xcb_atom_enum_t.ATOM,
         32, 2, protocols.data,
+    );
+
+    xcb_change_window_attributes(
+        d.handle,
+        window,
+        xcb_cw_t.WIN_GRAVITY,
+        u32.[xx xcb_gravity_t.NORTH_WEST].data,
     );
 
     class_sz := sprint("%\0%\0", ifx window_name then window_name else window_class, window_class);
@@ -262,7 +271,7 @@ xcb_create_window :: (
         .REPLACE,
         window,
         xx xcb_atom_enum_t.WM_CLASS,
-        xx xcb_atom_enum_t.STRING, 
+        xx xcb_atom_enum_t.STRING,
         8, xx class_sz.count, class_sz.data,
     );
 
@@ -401,8 +410,16 @@ xcb_update_window_events :: (display: *Display) {
         pending_event = xcb_poll_for_event(d.handle);
     }
 
-    while pending_event != null {
-        defer pending_event = xcb_poll_for_event(d.handle);
+    expect_more_events := false;
+    elapsed_time := seconds_since_init();
+    while pending_event != null || (expect_more_events && elapsed_time < 1.0) {
+        defer {
+            pending_event = xcb_poll_for_event(d.handle);
+            elapsed_time = seconds_since_init() - elapsed_time;
+        }
+
+        if !pending_event continue;
+        expect_more_events = false;
 
         response_type := pending_event.response_type & ~0x80;
 
@@ -432,10 +449,16 @@ xcb_update_window_events :: (display: *Display) {
                     input_ev.type = .QUIT;
                     // array_add(*display.base.events_this_frame, input_ev);
                     array_add(*Input.events_this_frame, input_ev);
-                } else if ev.data.data32[0] == xx d.atoms.WM_PROTOCOLS {
-                    print("%\n", ev.data);
+                } else if ev.type == d.atoms.WM_PROTOCOLS && ev.data.data32[0] == xx d.atoms._NET_WM_SYNC_REQUEST {
+                    window := get_by_native_handle(display, xx ev.window);
+                    if window {
+                        window.xcb.sync.resize_id.lo = ev.data.data32[2];
+                        window.xcb.sync.resize_id.hi = xx ev.data.data32[3];
+                        window.xcb.sync.resize_in_progress = false;
+                        xcb_sync.set_counter(d.handle, window.xcb.sync.counter_id, window.xcb.sync.resize_id);
+                        expect_more_events = true;
+                    }
                 }
-                print("%\n", formatStruct(ev, 1, true));
 
             case XCB_EXPOSE;
                 // We could add a new event type to just redraw a window
@@ -576,12 +599,32 @@ xcb_sync_init :: (window: *XCB_Window) -> success: bool {
         .REPLACE,
         window.handle,
         atom,
-        xx xcb_atom_enum_t.CARDINAL, 
+        xx xcb_atom_enum_t.CARDINAL,
         32, 1, *window.sync.counter_id,
     );
-    
+
     window.sync.initialized = true;
     return true;
+}
+
+xcb_finalize_present :: (window: *Window) {
+    win: *XCB_Window = window;
+    display := window.base.display.xcb.handle;
+    counter := win.sync.counter_id;
+
+    if !counter || !win.sync.resize_in_progress {
+        return;
+    }
+
+    cookie := xcb_sync.set_counter_checked(display, counter, win.sync.resize_id);
+    error := xcb_request_check(display, cookie);
+    if error {
+        log_error("Couldn't set the counter when finalizing window present, error is %\n", formatStruct(error, 1, true));
+    }
+
+    win.sync.resize_id.lo = 0;
+    win.sync.resize_id.hi = 0;
+    win.sync.resize_in_progress = false;
 }
 
 #scope_file
