@@ -170,6 +170,7 @@ swap_buffers :: (window: Window_Type, vsync := true) {  // @Incomplete: Have som
 
         // glXSwapBuffers(x_global_display, info.specific.glx_window);
         eglSwapBuffers(the_egl_display, info.specific.egl_surface);
+        finalize_present(window);
     } else #if OS == .MACOS {
         // On macOS, OpenGL buffer swapping is done on the context, not on the view.
         // So we can only swap for the active window. (And you need to swap before switching to another view).
