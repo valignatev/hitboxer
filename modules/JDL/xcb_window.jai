@@ -1,6 +1,4 @@
-// TODO: remove this namespace
-xcb :: #import,file "./xcb.jai";
-#import,file "./xcb_xkb.jai";
+#import "xcb";
 #import "libxkbcommon";
 
 #load "./x11.jai";
@@ -13,36 +11,46 @@ Saved_Window_Info :: struct {
 XCB_Display :: struct {
     #as using base: Base_Display;
 
-    handle: *xcb.xcb_connection_t;
-    screen: *xcb.xcb_screen_t;
+    handle: *xcb_connection_t;
+    screen: *xcb_screen_t;
     file_descriptor: s32;
-    pending_event: *xcb.xcb_generic_event_t;
+    pending_event: *xcb_generic_event_t;
 
     // atom_names: Table(xcb_atom_t, string);
     atoms: struct {
-        INCR: xcb.xcb_atom_t;
-        CLIPBOARD: xcb.xcb_atom_t;
-        _NET_WM_ICON: xcb.xcb_atom_t;
-        _NET_WM_STATE: xcb.xcb_atom_t;
-        _NET_WM_STATE_MAXIMIZED_VERT: xcb.xcb_atom_t;
-        _NET_WM_STATE_MAXIMIZED_HORZ: xcb.xcb_atom_t;
-        _NET_WM_STATE_FULLSCREEN: xcb.xcb_atom_t;
-        _NET_WM_NAME: xcb.xcb_atom_t;
-        _NET_WM_ICON_NAME: xcb.xcb_atom_t;
-        WM_PROTOCOLS: xcb.xcb_atom_t;
-        WM_DELETE_WINDOW: xcb.xcb_atom_t;
+        INCR: xcb_atom_t;
+        CLIPBOARD: xcb_atom_t;
+        _NET_WM_ICON: xcb_atom_t;
+        _NET_WM_STATE: xcb_atom_t;
+        _NET_WM_STATE_MAXIMIZED_VERT: xcb_atom_t;
+        _NET_WM_STATE_MAXIMIZED_HORZ: xcb_atom_t;
+        _NET_WM_STATE_FULLSCREEN: xcb_atom_t;
+        _NET_WM_NAME: xcb_atom_t;
+        _NET_WM_ICON_NAME: xcb_atom_t;
+        _NET_WM_SYNC_REQUEST: xcb_atom_t;
+        _NET_WM_SYNC_REQUEST_COUNTER: xcb_atom_t;
+        WM_PROTOCOLS: xcb_atom_t;
+        WM_DELETE_WINDOW: xcb_atom_t;
 
-        UTF8_STRING: xcb.xcb_atom_t;
+        UTF8_STRING: xcb_atom_t;
     }
 
     currently_hovered_window: *XCB_Window;
+
+    xcb_sync_info: struct {
+        present: bool;
+        major: u16;
+        minor: u16;
+    }
 }
 
 
 XCB_Window :: struct {
     #as using base: Base_Window;
 
-    handle: xcb.xcb_window_t;
+    handle: xcb_window_t;
+
+    sync: Sync_State;
 }
 
 
@@ -52,14 +60,7 @@ toggle_fullscreen :: (win: Window, desire_fullscreen: bool, saved: *Saved_Window
 
 
 xcb_init_display :: (display: *Display) -> bool {
-    if !load_procs(
-        *xcb_xkb,
-        .["libxcb-xkb.so.1", "libxcb-xkb.so" ],
-        *xcb_xkb_loaded,
-    ) {
-        return false;
-    }
-
+    if !load_xcb() return false;
     if !xkbcommon_load(init_xcb_compat=true) return false;
     
     d := XCB_Display.{ base = display };
@@ -71,8 +72,8 @@ xcb_init_display :: (display: *Display) -> bool {
     d.base.update_window_events = xcb_update_window_events;
     d.base.translate_key_code  = x11_translate_key_code;
     
-    d.handle = xcb.xcb_connect(null, null);
-    con_errors := xcb.xcb_connection_has_error(d.handle);
+    d.handle = xcb_connect(null, null);
+    con_errors := xcb_connection_has_error(d.handle);
 
     if con_errors {
         // TODO: Figure out correct strategy for error handling;
@@ -80,34 +81,34 @@ xcb_init_display :: (display: *Display) -> bool {
         return false;
     }
 
-    d.file_descriptor = xcb.xcb_get_file_descriptor(d.handle);
-    screen := xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(d.handle)).data;
+    d.file_descriptor = xcb_get_file_descriptor(d.handle);
+    screen := xcb_setup_roots_iterator(xcb_get_setup(d.handle)).data;
     d.screen = screen;
 
     // Intern Atoms
     tis := cast(*Type_Info_Struct) type_of(d.atoms);
     atom_infos: [..] struct {
-        cookie: xcb.xcb_intern_atom_cookie_t;
-        atom: *xcb.xcb_atom_t;
+        cookie: xcb_intern_atom_cookie_t;
+        atom: *xcb_atom_t;
         name: string;
     };
     array_reserve(*atom_infos, tis.members.count);
     for atom: tis.members {
         create := false;
         // Implement @create note lmao
-        if atom.name == "UTF8_STRING"{
-            create = true;
-        }
+        // if atom.name == "_NET_WM_SYNC_REQUEST" {
+        //     create = true;
+        // }
         array_add(*atom_infos, .{
-            cookie = xcb.xcb_intern_atom(d.handle, xx create, xx atom.name.count, atom.name.data),
-            atom = cast(*xcb.xcb_atom_t)(cast(*u8) *d.atoms + atom.offset_in_bytes),
+            cookie = xcb_intern_atom(d.handle, xx create, xx atom.name.count, atom.name.data),
+            atom = cast(*xcb_atom_t)(cast(*u8) *d.atoms + atom.offset_in_bytes),
             name = atom.name,
         });
     }
 
     for info: atom_infos {
-        error: *xcb.xcb_generic_error_t;
-        reply := xcb.xcb_intern_atom_reply(d.handle, info.cookie, *error);
+        error: *xcb_generic_error_t;
+        reply := xcb_intern_atom_reply(d.handle, info.cookie, *error);
         if !reply {
             log_error("Failed to intern X11 atom: %", error.*);
             continue;
@@ -119,42 +120,67 @@ xcb_init_display :: (display: *Display) -> bool {
 
     // And libxkbcommon
     // TODO: Maybe extract it into xkbcommon.jai
-    xkb_major: u16 = 1;
-    xkb_minor: u16 = 0;
-    ret := xkb_x11_setup_xkb_extension(
-        d.handle,
-        xkb_major,
-        xkb_minor,
-        0,
-        *xkb_major, *xkb_minor, *d.base.xkb_state.event_base, null,
-    );
+    {
+        xkb_major: u16 = 1;
+        xkb_minor: u16 = 0;
+        ret := xkb_x11_setup_xkb_extension(
+            d.handle,
+            xkb_major,
+            xkb_minor,
+            0,
+            *xkb_major, *xkb_minor, *d.base.xkb_state.event_base, null,
+        );
 
-    if (!ret) {
-        log_error("Couldn't setup XKB extension\n");
-        return false; 
+        if (!ret) {
+            log_error("Couldn't setup XKB extension\n");
+            return false; 
+        }
+        log("XCB: xcb-xkb version %.%", xkb_major, xkb_minor);
+
+        affect := xcb_xkb_event_type_t.NEW_KEYBOARD_NOTIFY | .MAP_NOTIFY | .STATE_NOTIFY;
+        map_parts := xcb_xkb_map_part_t.KEY_TYPES | .KEY_SYMS | .MODIFIER_MAP | .EXPLICIT_COMPONENTS | .KEY_ACTIONS | .VIRTUAL_MODS | .VIRTUAL_MOD_MAP;
+        state_parts := xcb_xkb_state_part_t.MODIFIER_BASE | .MODIFIER_LATCH | .MODIFIER_LOCK | .GROUP_BASE | .GROUP_LATCH | .GROUP_LOCK;
+        details := xcb_xkb_select_events_details_t.{
+            affectNewKeyboard = .KEYCODES,
+            newKeyboardDetails = .KEYCODES,
+            affectState = state_parts,
+            stateDetails = state_parts,
+        };
+
+        core_kbd_device_id := xkb_x11_get_core_keyboard_device_id(d.handle);
+        if (core_kbd_device_id == -1) {
+            log_error("Couldn't find core keyboard device\n");
+            return false;
+        } else {
+            log("Core keyboard device is %\n", core_kbd_device_id);
+        }
+
+        xcb_xkb.select_events_aux(xx d.handle, xx core_kbd_device_id, affect, 0, 0, map_parts, map_parts, *details);
+        if !xkb_state_init(*d, cast(*xcb_connection_t)d.handle) return false;
     }
-    log("XCB: xcb-xkb version %.%", xkb_major, xkb_minor);
 
-    affect := xcb_xkb_event_type_t.NEW_KEYBOARD_NOTIFY | .MAP_NOTIFY | .STATE_NOTIFY;
-    map_parts := xcb_xkb_map_part_t.KEY_TYPES | .KEY_SYMS | .MODIFIER_MAP | .EXPLICIT_COMPONENTS | .KEY_ACTIONS | .VIRTUAL_MODS | .VIRTUAL_MOD_MAP;
-    state_parts := xcb_xkb_state_part_t.MODIFIER_BASE | .MODIFIER_LATCH | .MODIFIER_LOCK | .GROUP_BASE | .GROUP_LATCH | .GROUP_LOCK;
-    details := xcb_xkb_select_events_details_t.{
-        affectNewKeyboard = .KEYCODES,
-        newKeyboardDetails = .KEYCODES,
-        affectState = state_parts,
-        stateDetails = state_parts,
-    };
+    // xcb_sync
+    {
+        sync_ext := xcb_get_extension_data(d.handle, xcb_sync.id);
+        
+        // print("%\n", formatStruct(sync_ext, 1, true));
+        if (!sync_ext.present) {
+            log_error("SYNC is not present on this X11 server, install a better distro");
+            return false; 
+        }
 
-    core_kbd_device_id := xkb_x11_get_core_keyboard_device_id(d.handle);
-    if (core_kbd_device_id == -1) {
-        log_error("Couldn't find core keyboard device\n");
-        return false;
-    } else {
-        log("Core keyboard device is %\n", core_kbd_device_id);
+        init_error: *xcb_generic_error_t;
+        init_cookie := xcb_sync.initialize(d.handle, 5, 0);
+        init_reply := xcb_sync.initialize_reply(d.handle, init_cookie, *init_error);
+        d.xcb_sync_info.present = true;
+        d.xcb_sync_info.major = init_reply.major_version;;
+        d.xcb_sync_info.minor = init_reply.minor_version;;
+        if init_reply.major_version < 3 {
+            log_error("X11 sync version is too small, supported %, got %\n", 3, d.xcb_sync_info.major);
+        }
+
+        log("X11 sync: xcb-sync version %.%", d.xcb_sync_info.major, d.xcb_sync_info.minor);
     }
-
-    xcb_xkb.xcb_xkb_select_events_aux(xx d.handle, xx core_kbd_device_id, affect, 0, 0, map_parts, map_parts, *details);
-    if !xkb_state_init(*d, cast(*xcb_connection_t)d.handle) return false;
 
     display.xcb = d;
     return true;
@@ -182,15 +208,33 @@ xcb_create_window :: (
     window_ret.base.set_window_title = xcb_set_window_title;
     window_ret.base.has_native_handle = xcb_has_native_handle;
 
-    event_mask := xcb.xcb_event_mask_t.EXPOSURE | .STRUCTURE_NOTIFY | .FOCUS_CHANGE | .ENTER_WINDOW | .LEAVE_WINDOW | .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE | .POINTER_MOTION;
-    window := xcb.xcb_generate_id(d.handle);
-    window_ret.xcb.handle = window;
-    prop_mask := xcb.xcb_cw_t.BACK_PIXEL | .EVENT_MASK;
-    prop_list := u32.[screen.black_pixel, xx event_mask];
+    to_u16 :: (f: float) -> u16 #expand {
+        u := clamp(cast(s32)(f * 65535), 0, 65535);
+        return cast(u16) u;
+    }
 
-    xcb.xcb_create_window_checked(
+    // background_color: XColor;
+    // background_color.flags |= DoRed | DoGreen | DoBlue;
+    // background_color.red     = to_u16(background_color_rgb[0]);
+    // background_color.green   = to_u16(background_color_rgb[1]);
+    // background_color.blue    = to_u16(background_color_rgb[2]);
+    // XAllocColor(d, cmap, *background_color);
+
+
+
+    event_mask := xcb_event_mask_t.EXPOSURE | .STRUCTURE_NOTIFY | .FOCUS_CHANGE | .ENTER_WINDOW | .LEAVE_WINDOW | .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE | .POINTER_MOTION;
+    window := xcb_generate_id(d.handle);
+    window_ret.xcb.handle = window;
+    prop_mask := xcb_cw_t.BACK_PIXEL | .EVENT_MASK; // | .BIT_GRAVITY;
+    prop_list := u32.[
+        screen.black_pixel,
+        xx event_mask,
+        // xx xcb_gravity_t.STATIC,
+    ];
+
+    window_cookie := xcb_create_window_checked(
         c=d.handle,
-        depth=xcb.XCB_COPY_FROM_PARENT,
+        depth=XCB_COPY_FROM_PARENT,
         wid=window,
         parent=screen.root,
         x=xx window_x, y=xx window_y, width=xx width, height=xx height, border_width=1,
@@ -200,33 +244,47 @@ xcb_create_window :: (
         value_list=prop_list.data,
     );
 
-    xcb.xcb_change_property(
+    protocols := xcb_atom_t.[d.atoms.WM_DELETE_WINDOW, d.atoms._NET_WM_SYNC_REQUEST];
+
+    xcb_change_property(
         d.handle,
         .REPLACE,
         window,
         d.atoms.WM_PROTOCOLS,
-        xx xcb.xcb_atom_enum_t.ATOM, 
-        32, 1, *d.atoms.WM_DELETE_WINDOW,
+        xx xcb_atom_enum_t.ATOM, 
+        32, 2, protocols.data,
     );
 
     class_sz := sprint("%\0%\0", ifx window_name then window_name else window_class, window_class);
     defer free(class_sz);
-    xcb.xcb_change_property(
+    xcb_change_property(
         d.handle,
         .REPLACE,
         window,
-        xx xcb.xcb_atom_enum_t.WM_CLASS,
-        xx xcb.xcb_atom_enum_t.STRING, 
+        xx xcb_atom_enum_t.WM_CLASS,
+        xx xcb_atom_enum_t.STRING, 
         8, xx class_sz.count, class_sz.data,
     );
 
     xcb_set_window_title(window_ret, window_name);
 
-    xcb.xcb_map_window(d.handle, window);
-    xcb.xcb_flush(d.handle);
+    if d.xcb_sync_info.present {
+        result := xcb_sync_init(window_ret);
+        if !result {
+            log_error("XCB Sync couln't be initialized because the extension is not supported\n");
+        }
+    }
+
+    xcb_map_window(d.handle, window);
+    xcb_flush(d.handle);
+    window_error := xcb_request_check(d.handle, window_cookie);
+    if window_error {
+        print("%\n", formatStruct(window_error, 1, true));
+    }
 
     return true;
 }
+
 
 xcb_has_native_handle :: (window: *Window, native_handle: *void) -> bool {
     // xcb_check_usage(null, window);
@@ -234,10 +292,10 @@ xcb_has_native_handle :: (window: *Window, native_handle: *void) -> bool {
 }
 
 xcb_get_dimensions :: (window: *Window, right_handed: bool) -> (x: s32, y: s32, width: s32, height: s32, success := true) {
-    // xcb.xcb_check_usage(null, window);
+    // xcb_check_usage(null, window);
     w : *XCB_Window = window;
-    cookie := xcb.xcb_get_geometry(w.display.xcb.handle, w.handle);
-    geometry := xcb.xcb_get_geometry_reply(w.display.xcb.handle, cookie, null);
+    cookie := xcb_get_geometry(w.display.xcb.handle, w.handle);
+    geometry := xcb_get_geometry_reply(w.display.xcb.handle, cookie, null);
     return 0, 0, xx geometry.width, geometry.height, true;
 }
 
@@ -246,8 +304,8 @@ xcb_get_mouse_pointer_position :: (display: *Display, right_handed := false) -> 
     // xcb_check_usage(display, null);
     d: *XCB_Display = display;
 
-    cookie := xcb.xcb_query_pointer(d.handle, d.screen.root);
-    reply  := xcb.xcb_query_pointer_reply(d.handle, cookie, null);
+    cookie := xcb_query_pointer(d.handle, d.screen.root);
+    reply  := xcb_query_pointer_reply(d.handle, cookie, null);
     defer c_free(reply);
 
     return reply.root_x, reply.root_y, true;
@@ -259,8 +317,8 @@ xcb_get_mouse_pointer_position :: (window: *Window, right_handed: bool) -> x: s3
     w : *XCB_Window = window;
     d := w.display;
 
-    cookie := xcb.xcb_query_pointer(d.xcb.handle, w.handle);
-    reply  := xcb.xcb_query_pointer_reply(d.xcb.handle, cookie, null);
+    cookie := xcb_query_pointer(d.xcb.handle, w.handle);
+    reply  := xcb_query_pointer_reply(d.xcb.handle, cookie, null);
     defer c_free(reply);
 
     return reply.win_x, reply.win_y, true;
@@ -270,8 +328,8 @@ xcb_get_mouse_pointer_position :: (window: *Window, right_handed: bool) -> x: s3
 xcb_set_window_title :: (window: *Window, title: string) {
     // TODO: Error handling and check usage
     // xcb_check_usage(null, window);
-    set_utf8_property(window, xx xcb.xcb_atom_enum_t.WM_NAME, title);
-    set_utf8_property(window, xx xcb.xcb_atom_enum_t.WM_ICON_NAME, title);
+    set_utf8_property(window, xx xcb_atom_enum_t.WM_NAME, title);
+    set_utf8_property(window, xx xcb_atom_enum_t.WM_ICON_NAME, title);
     set_utf8_property(window, window.xcb.display.xcb.atoms._NET_WM_NAME, title);
     set_utf8_property(window, window.xcb.display.xcb.atoms._NET_WM_ICON_NAME, title);
 }
@@ -318,9 +376,9 @@ xcb_wait_for_events :: (display: *Display) {
 
         if pfd[0].revents & POLLIN {
             assert(d.pending_event == null);
-            d.pending_event = xcb.xcb_poll_for_event(d.handle);
+            d.pending_event = xcb_poll_for_event(d.handle);
             if !d.pending_event {
-                xcb.xcb_flush(d.handle);
+                xcb_flush(d.handle);
                 continue;
             }
             break;
@@ -334,22 +392,22 @@ xcb_update_window_events :: (display: *Display) {
 
     d: *XCB_Display = display;
 
-    pending_event: *xcb.xcb_generic_event_t;
+    pending_event: *xcb_generic_event_t;
 
     if d.pending_event {
         pending_event = d.pending_event;
         d.pending_event = null;
     } else {
-        pending_event = xcb.xcb_poll_for_event(d.handle);
+        pending_event = xcb_poll_for_event(d.handle);
     }
 
     while pending_event != null {
-        defer pending_event = xcb.xcb_poll_for_event(d.handle);
+        defer pending_event = xcb_poll_for_event(d.handle);
 
         response_type := pending_event.response_type & ~0x80;
 
         if response_type == d.base.xkb_state.event_base {
-            ev := cast(*xcb.xcb_generic_event_t) pending_event;
+            ev := cast(*xcb_generic_event_t) pending_event;
             if ev.pad0 == {
                 case XCB_XKB_NEW_KEYBOARD_NOTIFY; #through;
                 case XCB_XKB_MAP_NOTIFY; {
@@ -367,55 +425,62 @@ xcb_update_window_events :: (display: *Display) {
                 }
             }
         } else if response_type == {
-            case xcb.XCB_CLIENT_MESSAGE;
-                ev := cast(*xcb.xcb_client_message_event_t) pending_event;
+            case XCB_CLIENT_MESSAGE;
+                ev := cast(*xcb_client_message_event_t) pending_event;
                 if ev.data.data32[0] == xx d.atoms.WM_DELETE_WINDOW {
                     input_ev: Input.Event;
                     input_ev.type = .QUIT;
                     // array_add(*display.base.events_this_frame, input_ev);
                     array_add(*Input.events_this_frame, input_ev);
+                } else if ev.data.data32[0] == xx d.atoms.WM_PROTOCOLS {
+                    print("%\n", ev.data);
                 }
+                print("%\n", formatStruct(ev, 1, true));
 
-            case xcb.XCB_EXPOSE;
+            case XCB_EXPOSE;
                 // We could add a new event type to just redraw a window
-                xcb.xcb_flush(d.handle);
+                xcb_flush(d.handle);
 
-            case xcb.XCB_CONFIGURE_NOTIFY;
-                ev := cast(*xcb.xcb_configure_notify_event_t) pending_event;
+            case XCB_CONFIGURE_NOTIFY;
+                ev := cast(*xcb_configure_notify_event_t) pending_event;
                 window := get_by_native_handle(display, xx ev.window);
                 if window {
+                    if window.xcb.sync.resize_id.lo || window.xcb.sync.resize_id.hi {
+                        window.xcb.sync.resize_in_progress = true;
+                    }
                     // Belongs to Input
                     add_resize_record(window, ev.width, ev.height);
                 }
 
-            case xcb.XCB_FOCUS_IN;
+            case XCB_FOCUS_IN;
                 Input.input_application_has_focus = true;
                 // array_add(*display.base.events_this_frame, .{type=.WINDOW});
                 array_add(*Input.events_this_frame, .{type=.WINDOW});
 
-            case xcb.XCB_FOCUS_OUT;
+            case XCB_FOCUS_OUT;
                 Input.input_application_has_focus = false;
                 // array_add(*display.base.events_this_frame, .{type=.WINDOW});
                 array_add(*Input.events_this_frame, .{type=.WINDOW});
 
-            case xcb.XCB_ENTER_NOTIFY;
-                ev := cast(*xcb.xcb_enter_notify_event_t) pending_event;
+            case XCB_ENTER_NOTIFY;
+                ev := cast(*xcb_enter_notify_event_t) pending_event;
                 d.currently_hovered_window = get_by_native_handle(display, xx ev.event);
 
-            case xcb.XCB_LEAVE_NOTIFY;
+            case XCB_LEAVE_NOTIFY;
                 d.currently_hovered_window = null;
 
             case XCB_KEY_PRESS; #through;
             case XCB_KEY_RELEASE;
-                ev := cast(*xcb.xcb_key_press_event_t) pending_event;
-                event_type := ifx response_type == xcb.XCB_KEY_PRESS then XKB_Key_Event_Type.Press else .Release;
+                ev := cast(*xcb_key_press_event_t) pending_event;
+                event_type := ifx response_type == XCB_KEY_PRESS then XKB_Key_Event_Type.Press else .Release;
                 xkb_handle_key_event(d, ev.detail, event_type, false);
 
             case XCB_BUTTON_PRESS; #through;
             case XCB_BUTTON_RELEASE; {
-                ev := cast(*xcb.xcb_button_press_event_t) pending_event;
-                register_mouse_button_event(d, ev.detail, response_type == xcb.XCB_BUTTON_PRESS);
+                ev := cast(*xcb_button_press_event_t) pending_event;
+                register_mouse_button_event(d, ev.detail, response_type == XCB_BUTTON_PRESS);
             }
+            // case XCB_MOTION_NOTIFY;
             case;
                 // log("unhandled xcb event: % %", pending_event.response_type & ~0x80, pending_event.*);
         }
@@ -466,9 +531,9 @@ register_mouse_button_event :: (display: *XCB_Display, button: u32, pressed: boo
 }
 
 
-set_utf8_property :: (window: *XCB_Window, property: xcb.xcb_atom_t, value: string) {
+set_utf8_property :: (window: *XCB_Window, property: xcb_atom_t, value: string) {
     d := window.display.xcb;
-    xcb.xcb_change_property(
+    xcb_change_property(
         d.handle,
         .REPLACE,
         window.handle,
@@ -477,55 +542,49 @@ set_utf8_property :: (window: *XCB_Window, property: xcb.xcb_atom_t, value: stri
         8, xx value.count, value.data);
 }
 
+Sync_State :: struct {
+    initialized: bool;
 
-#scope_module
-xcb_xkb: XCB_XKB_Symbols;
+    counter_id: u32;
+    resize_id: xcb_sync_int64_t;
+    #place resize_id;
+    resize_id64: s64;
 
-#scope_file
-generic_c_call :: #type () #c_call;
-xcb_xkb_loaded := false;
+    resize_in_progress: bool;
+}
 
-load_procs :: (procs: *$T, libnames: []string, loaded: *bool) -> success := false {
-    if loaded.* return true;
-
-    loaded.* = false;
-    for libname : libnames {
-        dlerror();
-        lib := dlopen(temp_c_string(libname), RTLD_NOW);
-        if !lib {
-            log_error("Failed to load %: %", libname, to_string(dlerror()));
-            continue;
-        }
-
-        tis := cast(*Type_Info_Struct) type_info(T);
-        for m : tis.members {
-            dlerror();
-            name := m.name;
-            if m.type.type == .PROCEDURE {
-                if m.flags & .CONSTANT continue;
-
-                pi := cast(*Type_Info_Procedure) m.type;
-                if !(pi.procedure_flags & .IS_C_CALL) continue;
-
-                ppfn := cast(*generic_c_call)((cast(*u8) procs) + m.offset_in_bytes);
-                ppfn.* = cast(generic_c_call) dlsym(lib, name.data);
-                if !ppfn.* {
-                    log_error("Failed to resolve function '%' in '%': %", name, libname, to_string(dlerror()));
-                    continue libname;
-                }
-            } else if m.type.type == .POINTER {
-                ppv := cast(**void)((cast(*u8) procs) + m.offset_in_bytes);
-                ppv.* = dlsym(lib, name.data);
-            }
-        }
-
-        log("XCB: loaded %", libname);
-        loaded.* = true;
-        return true;
+xcb_sync_init :: (window: *XCB_Window) -> success: bool {
+    display := window.display.xcb;
+    if !display.xcb_sync_info.present {
+        return false;
     }
 
-    return false;
+    con := display.handle;
+    atom := display.atoms._NET_WM_SYNC_REQUEST_COUNTER;
+
+    window.sync.counter_id = xcb_generate_id(con);
+
+    counter_cookie := xcb_sync.create_counter_checked(con, window.sync.counter_id, window.sync.resize_id);
+    error := xcb_request_check(con, counter_cookie);
+    if error {
+        log_error("Couldn't create an xcb sync counter, error is: %\n", formatStruct(error, 1, true));
+        return false;
+    }
+
+    xcb_change_property(
+        con,
+        .REPLACE,
+        window.handle,
+        atom,
+        xx xcb_atom_enum_t.CARDINAL, 
+        32, 1, *window.sync.counter_id,
+    );
+    
+    window.sync.initialized = true;
+    return true;
 }
+
+#scope_file
 
 #import "POSIX";
 

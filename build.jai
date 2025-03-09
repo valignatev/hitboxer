@@ -29,8 +29,6 @@ build :: () {
         }
     }
 
-    remap_import(w, "", "Input", "");
-    remap_import(w, "", "Window_Type", "");
     set_build_options(target_options, w);
 
     #if OS == .WINDOWS {
@@ -49,14 +47,6 @@ build :: () {
     while true {
         message := compiler_wait_for_message();
         if message.kind == {
-            case .FAILED_IMPORT;
-            m := cast(*Message_Failed_Import) message;
-            if m.target_module_name == {
-                case "Input";
-                provide_import(message.workspace, m, .PATH_TO_DIRECTORY, modules_dir);
-                case "Window_Type";
-                provide_import(message.workspace, m, .PATH_TO_DIRECTORY, modules_dir);
-            }
             case .TYPECHECKED;
             typechecked := cast(*Message_Typechecked) message;
             or_return_handle_typechecked(typechecked);
