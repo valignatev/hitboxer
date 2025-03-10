@@ -768,9 +768,14 @@ main :: () {
         }
 
         is_altf4 := false;
-        for event: Input.events_this_frame {
+        for *event: Input.events_this_frame {
             if event.type == .KEYBOARD && event.key_pressed && event.key_code == .F4 && event.alt_pressed {
                 is_altf4 = true;
+            }
+            // We are ignoring text input if control was held down when it happened.
+            if event.type == .TEXT_INPUT && event.ctrl_pressed {
+                remove event;
+                continue;
             }
             if event.type == .QUIT {
                 quit = true;
@@ -785,8 +790,6 @@ main :: () {
             }
 
             getrect_handle_event(event);
-
-            // TODO: handle alt+f4
         }
         if active_state == .NOTHING {
             unset_mapping_setting_hook();
@@ -846,6 +849,7 @@ draw_one_frame :: (dt: float, window: *Window) {
     padding := default_padding;
 
     x:, y:, window_width, window_height = get_dimensions(window, false);
+    // This is hardcoded because scrollable area scrollbare and frame depend on window size???
     ui_per_frame_update(window, 800, 800, current_time);
 
     //

@@ -44,6 +44,8 @@ Base_Display :: struct {
     wait_for_events: #type (display: *Display);
     update_window_events: #type (display: *Display);
     translate_key_code: #type (key: u64) -> Input.Key_Code;
+    clipboard_get_text: #type (display: *Display) -> string;
+    clipboard_set_text: #type (display: *Display, text: string);
     get_dimensions: #type (
         window: *Window,
         right_handed: bool) -> x: s32, y: s32, width: s32, height: s32, success: bool;
@@ -208,8 +210,19 @@ finalize_present :: inline (window: *Window) {
 Window_Type :: *Window;
 INVALID_WINDOW : Window_Type : null;
 
+
+// Clipboard
+clipboard_get_text :: inline () -> string {  // Allocated via alloc; should be manually freed.
+    return main_display.clipboard_get_text(main_display);
+}
+
+clipboard_set_text :: (text: string) {
+    main_display.clipboard_set_text(main_display, text);
+}
+
+clipboard_set_bitmap :: (width: s32, height: s32, pixels: *u8, channels: s32, flip := false) {
+    // Not implemented
+}
+
 #scope_file
 _main_display: Display;
-
-#import "Hash_Table";
-

@@ -149,10 +149,10 @@ xkb_handle_key_event :: (d: *Base_Display, keycode: u32, event_type: XKB_Key_Eve
 
     ji_event: Input.Event;
     ji_event.type = .KEYBOARD;
-    ji_event.shift_pressed    = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_shift, .XKB_STATE_MODS_EFFECTIVE) == 1;
-    ji_event.ctrl_pressed     = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_ctrl,  .XKB_STATE_MODS_EFFECTIVE) == 1;
-    ji_event.alt_pressed      = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_alt,   .XKB_STATE_MODS_EFFECTIVE) == 1;
-    ji_event.cmd_meta_pressed = xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_super, .XKB_STATE_MODS_EFFECTIVE) == 1;
+    shift_pressed    := xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_shift, .XKB_STATE_MODS_EFFECTIVE) == 1;
+    ctrl_pressed     := xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_ctrl,  .XKB_STATE_MODS_EFFECTIVE) == 1;
+    alt_pressed      := xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_alt,   .XKB_STATE_MODS_EFFECTIVE) == 1;
+    cmd_meta_pressed := xkb_state_mod_index_is_active(state.kb_state, state.mod_idx_super, .XKB_STATE_MODS_EFFECTIVE) == 1;
 
     if event_type == .Press {
         xkb_compose_state_feed(state.kb_compose_state, keysym);
@@ -178,11 +178,16 @@ xkb_handle_key_event :: (d: *Base_Display, keycode: u32, event_type: XKB_Key_Eve
     ji_event.repeat = repeat;
 
     if ji_event.key_code == {
-        case .SHIFT; ji_event.shift_pressed = true;
-        case .CTRL;  ji_event.ctrl_pressed = true;
-        case .ALT;   ji_event.alt_pressed = true;
-        case .META;  ji_event.cmd_meta_pressed = true;
+        case .SHIFT; shift_pressed = true;
+        case .CTRL;  ctrl_pressed = true;
+        case .ALT;   alt_pressed = true;
+        case .META;  cmd_meta_pressed = true;
     }
+
+    ji_event.shift_pressed = shift_pressed;
+    ji_event.ctrl_pressed = ctrl_pressed;
+    ji_event.alt_pressed = alt_pressed;
+    ji_event.cmd_meta_pressed = cmd_meta_pressed;
 
     array_add(*Input.events_this_frame, ji_event);
     idx := Input.events_this_frame.count - 1;
@@ -193,6 +198,13 @@ xkb_handle_key_event :: (d: *Base_Display, keycode: u32, event_type: XKB_Key_Eve
         text_event.key_pressed = 1;
         text_event.key_code = ji_event.key_code;
         text_event.utf32 = utf32;
+
+        // We are setting modifiers on the text event to help users
+        // to filter this text event out when they handle it.
+        text_event.shift_pressed = shift_pressed;
+        text_event.ctrl_pressed = ctrl_pressed;
+        text_event.alt_pressed = alt_pressed;
+        text_event.cmd_meta_pressed = cmd_meta_pressed;
         array_add(*Input.events_this_frame, text_event);
     }
 
