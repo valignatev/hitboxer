@@ -14,12 +14,14 @@ XCB_Display :: struct {
     handle: *xcb_connection_t;
     screen: *xcb_screen_t;
     file_descriptor: s32;
+    max_request_length: s64;
     pending_event: *xcb_generic_event_t;
 
-    // atom_names: Table(xcb_atom_t, string);
+    atom_names: Table(xcb_atom_t, string);
     atoms: struct {
         INCR: xcb_atom_t;
         CLIPBOARD: xcb_atom_t;
+        TARGETS: xcb_atom_t;                         @create
         _NET_WM_ICON: xcb_atom_t;
         _NET_WM_STATE: xcb_atom_t;
         _NET_WM_STATE_MAXIMIZED_VERT: xcb_atom_t;
@@ -31,16 +33,31 @@ XCB_Display :: struct {
         _NET_WM_SYNC_REQUEST_COUNTER: xcb_atom_t;
         WM_PROTOCOLS: xcb_atom_t;
         WM_DELETE_WINDOW: xcb_atom_t;
+        JDL_CLIPBOARD_DATA: xcb_atom_t;              @create
 
-        UTF8_STRING: xcb_atom_t;
+        UTF8_STRING: xcb_atom_t;                     @create
     }
 
     currently_hovered_window: *XCB_Window;
 
-    xcb_sync_info: struct {
+    sync_info: struct {
         present: bool;
         major: u16;
         minor: u16;
+    }
+
+    clipboard: struct {
+        // This is a window that owns clipboard property so that we don't have to transfer it around
+        // when some other window that holds it otherwise getting closed/destroyed. It just makes things easier
+        // to have a dedicated invisible window to own clipboard data for us.
+        window: xcb_window_t;
+        blocking_tranfser_ongoing: bool;
+        // window: xcb_window_t;
+        incoming_data: string;        // from the outside to us
+        large_incoming_tranfer: bool; // incoming data is slip over multiple PropertyNotify events
+        incoming_in_flight_data: String_Builder;  // buffer for incoming data from multiple PropertyNotify events
+
+        outgoing_data: string;   // from us to the outside
     }
 }
 
@@ -71,6 +88,8 @@ xcb_init_display :: (display: *Display) -> bool {
     d.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
     d.base.update_window_events = xcb_update_window_events;
     d.base.translate_key_code  = x11_translate_key_code;
+    d.base.clipboard_get_text = xcb_clipboard_get_text;
+    d.base.clipboard_set_text = xcb_clipboard_set_text;
 
     d.handle = xcb_connect(null, null);
     con_errors := xcb_connection_has_error(d.handle);
@@ -85,6 +104,9 @@ xcb_init_display :: (display: *Display) -> bool {
     screen := xcb_setup_roots_iterator(xcb_get_setup(d.handle)).data;
     d.screen = screen;
 
+    d.max_request_length = xcb_get_maximum_request_length(d.handle);
+    log("XCB: max_request_length=%", d.max_request_length);
+
     // Intern Atoms
     tis := cast(*Type_Info_Struct) type_of(d.atoms);
     atom_infos: [..] struct {
@@ -94,13 +116,9 @@ xcb_init_display :: (display: *Display) -> bool {
     };
     array_reserve(*atom_infos, tis.members.count);
     for atom: tis.members {
-        create := false;
-        // Implement @create note lmao
-        // if atom.name == "_NET_WM_SYNC_REQUEST" {
-        //     create = true;
-        // }
+        should_create, _ := array_find(atom.notes, "create");
         array_add(*atom_infos, .{
-            cookie = xcb_intern_atom(d.handle, xx create, xx atom.name.count, atom.name.data),
+            cookie = xcb_intern_atom(d.handle, xx !should_create, xx atom.name.count, atom.name.data),
             atom = cast(*xcb_atom_t)(cast(*u8) *d.atoms + atom.offset_in_bytes),
             name = atom.name,
         });
@@ -117,6 +135,24 @@ xcb_init_display :: (display: *Display) -> bool {
         info.atom.* = reply.atom;
         c_free(reply);
     }
+
+    d.clipboard.window = xcb_generate_id(d.handle);
+    prop_mask := xcb_cw_t.EVENT_MASK;
+    prop_list := u32.[xx (xcb_event_mask_t.PROPERTY_CHANGE)];
+    xcb_create_window_checked(
+        c=d.handle,
+        depth=XCB_COPY_FROM_PARENT,
+        wid=d.clipboard.window,
+        parent=d.screen.root,
+        x=0, y=0, width=1, height=1, border_width=1,
+        _class=.XCB_WINDOW_CLASS_INPUT_OUTPUT,
+        visual=d.screen.root_visual,
+        value_mask=prop_mask,
+        value_list=prop_list.data,
+    );
+
+    d.clipboard.incoming_data = copy_string("");
+    d.clipboard.outgoing_data = copy_string("");
 
     // And libxkbcommon
     // TODO: Maybe extract it into xkbcommon.jai
@@ -172,14 +208,14 @@ xcb_init_display :: (display: *Display) -> bool {
         init_error: *xcb_generic_error_t;
         init_cookie := xcb_sync.initialize(d.handle, 5, 0);
         init_reply := xcb_sync.initialize_reply(d.handle, init_cookie, *init_error);
-        d.xcb_sync_info.present = true;
-        d.xcb_sync_info.major = init_reply.major_version;;
-        d.xcb_sync_info.minor = init_reply.minor_version;;
+        d.sync_info.present = true;
+        d.sync_info.major = init_reply.major_version;;
+        d.sync_info.minor = init_reply.minor_version;;
         if init_reply.major_version < 3 {
-            log_error("X11 sync version is too small, supported %, got %\n", 3, d.xcb_sync_info.major);
+            log_error("X11 sync version is too small, supported %, got %\n", 3, d.sync_info.major);
         }
 
-        log("X11 sync: xcb-sync version %.%", d.xcb_sync_info.major, d.xcb_sync_info.minor);
+        log("X11 sync: xcb-sync version %.%", d.sync_info.major, d.sync_info.minor);
     }
 
     display.xcb = d;
@@ -277,7 +313,7 @@ xcb_create_window :: (
 
     xcb_set_window_title(window_ret, window_name);
 
-    if d.xcb_sync_info.present {
+    if d.sync_info.present {
         result := xcb_sync_init(window_ret);
         if !result {
             log_error("XCB Sync couln't be initialized because the extension is not supported\n");
@@ -415,11 +451,10 @@ xcb_update_window_events :: (display: *Display) {
     while pending_event != null || (expect_more_events && elapsed_time < 1.0) {
         defer {
             pending_event = xcb_poll_for_event(d.handle);
-            elapsed_time = seconds_since_init() - elapsed_time;
         }
 
         if !pending_event continue;
-        expect_more_events = false;
+        // expect_more_events = false;
 
         response_type := pending_event.response_type & ~0x80;
 
@@ -457,6 +492,7 @@ xcb_update_window_events :: (display: *Display) {
                         window.xcb.sync.resize_in_progress = false;
                         xcb_sync.set_counter(d.handle, window.xcb.sync.counter_id, window.xcb.sync.resize_id);
                         expect_more_events = true;
+                        elapsed_time = 0;
                     }
                 }
 
@@ -467,6 +503,8 @@ xcb_update_window_events :: (display: *Display) {
             case XCB_CONFIGURE_NOTIFY;
                 ev := cast(*xcb_configure_notify_event_t) pending_event;
                 window := get_by_native_handle(display, xx ev.window);
+                expect_more_events = false;
+                elapsed_time = seconds_since_init() - elapsed_time;
                 if window {
                     if window.xcb.sync.resize_id.lo || window.xcb.sync.resize_id.hi {
                         window.xcb.sync.resize_in_progress = true;
@@ -503,7 +541,149 @@ xcb_update_window_events :: (display: *Display) {
                 ev := cast(*xcb_button_press_event_t) pending_event;
                 register_mouse_button_event(d, ev.detail, response_type == XCB_BUTTON_PRESS);
             }
-            // case XCB_MOTION_NOTIFY;
+            case XCB_SELECTION_NOTIFY;
+                ev := cast(*xcb_selection_notify_event_t) pending_event;
+                log("EV: selection_notify(requestor=% (%), selection=% (%), target=% (%), property=% (% - %))",
+                    ev.requestor,
+                    d.clipboard.window,
+                    atom_name(d, ev.selection), ev.selection,
+                    atom_name(d, ev.target), ev.target,
+                    atom_name(d, ev.property), ev.property, d.atoms.JDL_CLIPBOARD_DATA);
+
+                d.clipboard.large_incoming_tranfer = false;
+
+                // We don't handle selection request if it comes from one of our windows
+                if !ev.property || ev.requestor != d.clipboard.window {
+                    d.clipboard.blocking_tranfser_ongoing = false;
+                    continue;
+                }
+
+                xcb_err: *xcb_generic_error_t;
+                cookie := xcb_get_property(
+                    d.handle, 1,
+                    ev.requestor,
+                    d.atoms.JDL_CLIPBOARD_DATA,
+                    xx xcb_atom_enum_t.ANY,
+                    0, ~cast(u32)0,
+                );
+                reply := xcb_get_property_reply(d.handle, cookie, *xcb_err);
+                defer c_free(reply);
+
+                if !reply {
+                    log("get_property(): %", formatStruct(xcb_err, 1, true));
+                    continue;
+                }
+
+                log("  reply.type=% format=%", atom_name(d, reply.type), reply.format);
+
+                if reply.type == d.atoms.UTF8_STRING && reply.format == 8 {
+                    text: string;
+                    text.data = xcb_get_property_value(reply);
+                    text.count = xcb_get_property_value_length(reply);
+                    log("CLIPBOARD DATA: '%'", text);
+
+                    free(d.clipboard.incoming_data);
+                    d.clipboard.incoming_data = copy_string(text);
+                    d.clipboard.blocking_tranfser_ongoing = false;
+                } else if reply.type == d.atoms.INCR && reply.format == 32 {
+                    log("  large clipboard transfer initiated");
+                    d.clipboard.large_incoming_tranfer = true;
+                    reset(*d.clipboard.incoming_in_flight_data);
+                }
+            case XCB_PROPERTY_NOTIFY;
+                ev := cast(*xcb_property_notify_event_t) pending_event;
+                state := cast(xcb_property_t) ev.state;
+                log("property_notify(window=% atom=% state=%)", ev.window, atom_name(d, ev.atom), state);
+
+                if ev.window != d.clipboard.window || state != .NEW_VALUE || !d.clipboard.large_incoming_tranfer {
+                    continue;
+                }
+
+                xcb_err: *xcb_generic_error_t;
+                cookie := xcb_get_property(d.handle,
+                    1,
+                    d.clipboard.window,
+                    d.atoms.JDL_CLIPBOARD_DATA,
+                    xx xcb_atom_enum_t.ANY,
+                    0, ~cast(u32)0);
+                reply := xcb_get_property_reply(d.handle, cookie, *xcb_err);
+                defer c_free(reply);
+
+                if !reply {
+                    log_error("get_property(): %", xcb_err.*);
+                    log("Resetting large clipboard data transfer");
+                    d.clipboard.large_incoming_tranfer = false;
+                    reset(*d.clipboard.incoming_in_flight_data);
+                    continue;
+                }
+
+                if reply.type == d.atoms.UTF8_STRING && reply.format == 8 {
+                    text: string;
+                    text.data = xcb_get_property_value(reply);
+                    text.count = xcb_get_property_value_length(reply);
+                    if !text {
+                        log("Finished large clipboard transfer!");
+                        free(d.clipboard.incoming_data);
+                        d.clipboard.incoming_data = builder_to_string(*d.clipboard.incoming_in_flight_data);
+                        d.clipboard.large_incoming_tranfer = false;
+                        d.clipboard.blocking_tranfser_ongoing = false;
+                    } else {
+                        append(*d.clipboard.incoming_in_flight_data, text);
+                        log("Added % bytes of clipboard data", text.count);
+                    }
+                }
+            case XCB_SELECTION_REQUEST;
+                ev := cast(*xcb_selection_request_event_t) pending_event;
+                log("selection_request(self.clipboard_window=% owner=% requestor=% selection=% target=% property=%)",
+                    d.clipboard.window, ev.owner, ev.requestor,
+                    atom_name(d, ev.selection),
+                    atom_name(d, ev.target),
+                    atom_name(d, ev.property));
+
+                if ev.target == d.atoms.TARGETS {
+                    atoms := xcb_atom_t.[d.atoms.UTF8_STRING, d.atoms.TARGETS];
+                    cookie := xcb_change_property(d.handle, .REPLACE, ev.requestor, ev.property,
+                        xx xcb_atom_enum_t.ATOM, 32, xx atoms.count, atoms.data);
+                    xcb_err := xcb_request_check(d.handle, cookie);
+                    if xcb_err {
+                        log_error("Failed to set property % on SelectionRequest(%).requestor=%: %",
+                            atom_name(d, ev.property),
+                            atom_name(d, ev.target),
+                            ev.requestor,
+                            xcb_err.*);
+                        continue;
+                    }
+                } else if ev.target == d.atoms.UTF8_STRING {
+                    max_length := min(d.max_request_length * 4 - 1024, d.clipboard.outgoing_data.count);
+                    cookie := xcb_change_property(d.handle, .REPLACE, ev.requestor, ev.property,
+                        ev.target, 8, xx max_length, d.clipboard.outgoing_data.data);
+                    xcb_err := xcb_request_check(d.handle, cookie);
+                    if xcb_err {
+                        log_error("Failed to set property % on SelectionRequest(%).requestor=%: %",
+                            atom_name(d, ev.property),
+                            atom_name(d, ev.target),
+                            ev.requestor,
+                            xcb_err.*);
+                        continue;
+                    }
+                }
+
+                sel_notify := xcb_selection_notify_event_t.{
+                    response_type = XCB_SELECTION_NOTIFY,
+                    requestor = ev.requestor,
+                    selection = ev.selection,
+                    target = ev.target,
+                    time = ev.time,
+                    property = ev.property,
+                };
+                cookie := xcb_send_event(d.handle, 1, ev.requestor, 0, xx *sel_notify);
+                xcb_err := xcb_request_check(d.handle, cookie);
+                if xcb_err {
+                    log_error("Failed to send SelectionNotify to requestor %: %",
+                        ev.requestor,
+                        xcb_err.*);
+                    continue;
+                }
             case;
                 // log("unhandled xcb event: % %", pending_event.response_type & ~0x80, pending_event.*);
         }
@@ -578,7 +758,7 @@ Sync_State :: struct {
 
 xcb_sync_init :: (window: *XCB_Window) -> success: bool {
     display := window.display.xcb;
-    if !display.xcb_sync_info.present {
+    if !display.sync_info.present {
         return false;
     }
 
@@ -627,9 +807,75 @@ xcb_finalize_present :: (window: *Window) {
     win.sync.resize_in_progress = false;
 }
 
+xcb_clipboard_get_text :: (display: *Display) -> string {
+    d : *XCB_Display = display;
+
+    cookie := xcb_get_selection_owner(d.handle, d.atoms.CLIPBOARD);
+    reply := xcb_get_selection_owner_reply(d.handle, cookie, null);
+    defer c_free(reply);
+
+    if reply.owner == d.clipboard.window {
+        return copy_string(d.clipboard.outgoing_data);
+    }
+
+    void_cookie := xcb_convert_selection(
+        d.handle,
+        d.clipboard.window,
+        d.atoms.CLIPBOARD,
+        d.atoms.UTF8_STRING,
+        d.atoms.JDL_CLIPBOARD_DATA,
+        XCB_CURRENT_TIME,
+    );
+    xcb_err := xcb_request_check(d.handle, void_cookie);
+
+    if xcb_err {
+        log_error("convert_selection(): %", formatStruct(xcb_err, 1, true));
+    }
+
+    d.clipboard.blocking_tranfser_ongoing = true;
+    start_time := seconds_since_init();
+    now := seconds_since_init();
+    while (now - start_time) < 5.0 && d.clipboard.blocking_tranfser_ongoing {
+        if !d.pending_event  d.pending_event = xcb_wait_for_event(d.handle);
+        xcb_update_window_events(display);
+        now = seconds_since_init();
+    }
+
+    return copy_string(d.clipboard.incoming_data);
+}
+
+xcb_clipboard_set_text :: (display: *Display, text: string) {
+    d : *XCB_Display = display;
+    free(d.clipboard.outgoing_data);
+    d.clipboard.outgoing_data = copy_string(text);
+    cookie  := xcb_set_selection_owner(d.handle, d.clipboard.window, d.atoms.CLIPBOARD, XCB_CURRENT_TIME);
+    xcb_err := xcb_request_check(d.handle, cookie);
+    if xcb_err log_error("Failed to set selection owner: %", formatStruct(xcb_err, 1, true));
+}
+
 #scope_file
 
+atom_name :: (d: *XCB_Display, atom: xcb_atom_t) -> string {
+    name, found := table_find(*d.atom_names, atom);
+    if found return name;
+
+    xcb_err: *xcb_generic_error_t;
+    cookie := xcb_get_atom_name(d.handle, atom);
+    reply  := xcb_get_atom_name_reply(d.handle, cookie, *xcb_err);
+    defer c_free(reply);
+
+    if !reply || xcb_err return "";
+
+    n: string;
+    n.data  = xcb_get_atom_name_name(reply);
+    n.count = xcb_get_atom_name_name_length(reply);
+    name = copy_string(n);
+    table_add(*d.atom_names, atom, name);
+    return name;
+}
+
 #import "POSIX";
+#import "Hash_Table";
 
 libc :: #system_library "libc";
 c_free :: (memory: *void) #foreign libc "free";
