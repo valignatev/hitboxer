@@ -76,6 +76,7 @@ Program_State :: struct {
     need_to_scroll_profiles: bool;
     need_to_rerender := false;
     close_to_tray := false;
+    runtime_debug := false;
     // need_to_scroll_mappings_region: bool;
 }
 dummy_input_text_state: Text_Input_State;
@@ -86,7 +87,8 @@ dummy_bind := Mapping_Bind.{};
 get_key_mapping :: (source_scan_code: u32) -> Mapping_Bind {
     using current_program_state;
 
-    destination := or_return(table_find(*active_profile.mappings, source_scan_code));
+    found, destination := table_find_new(*active_profile.mappings, source_scan_code);
+    if !found return dummy_bind;
     return destination;
 }
 
@@ -365,6 +367,10 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
                     result := trim(right);
                     if result == "true" current_program_state.close_to_tray = true;
                     continue;
+                case "runtime_debug";
+                    result := trim(right);
+                    if result == "true" current_program_state.runtime_debug = true;
+                    continue;
                 case; {
                     tfh.error(*handler, "Unexpected global configuration ignored: %\n", left);
                     continue;
@@ -560,6 +566,7 @@ serialize_settings :: () -> succes: bool {
     print_to_builder(*b, CONFIG_HEADER, SETTINGS_VERSION);
 
     print_to_builder(*b, "close_to_tray: %\n", close_to_tray);
+    print_to_builder(*b, "runtime_debug: %\n", runtime_debug);
 
     for * profile: profiles {
         append(*b, "PROFILE_START\n");
@@ -832,11 +839,46 @@ draw_one_frame :: (dt: float, window: Window_Type) {
         label(label_rect, "Global settings", *header_theme);
 
         next_y = label_rect.y + label_rect.h;
-        r := get_rect(10, next_y, left_side_width, button_height);
-        changed, state := our_checkbox(r, "Close to tray", close_to_tray, *checkbox_theme);
-        if changed {
-            close_to_tray ^= changed;
-            finalize_state();
+
+        // Close to tray
+        {
+            r := get_rect(10, next_y, left_side_width, button_height);
+            changed, state := our_checkbox(r, "Close to tray", close_to_tray, *checkbox_theme);
+            if changed {
+                close_to_tray ^= changed;
+                finalize_state();
+            }
+
+            next_y = r.y + r.h;
+        }
+
+        // Runtime debug description
+        {
+
+            label_theme := my_theme.label_theme;
+            label_theme.font = small_label_font;
+            r := get_rect(10, next_y, left_side_width, button_height / 3);
+            label(r, "Slower, leaks some memory.", *label_theme);
+
+            next_y = r.y + r.h;
+
+            r = get_rect(10, next_y, left_side_width, button_height / 3);
+            label(r, "For additional logging", *label_theme);
+
+            next_y = r.y + r.h;
+
+        }
+
+        // Runtime debug
+        {
+            r := get_rect(10, next_y, left_side_width, button_height);
+            changed, state := our_checkbox(r, "Debug (more logs)", runtime_debug, *checkbox_theme);
+            if changed {
+                runtime_debug ^= changed;
+                finalize_state();
+            }
+
+            next_y = r.y + r.h;
         }
     }
 
@@ -892,7 +934,7 @@ draw_one_frame :: (dt: float, window: Window_Type) {
     //
     // EMERGENCY QUIT BUTTON. TODO: only enable it in debug mode
     //
-    if DEBUG {
+    #if DEBUG {
         close_start := right_side_rect.w + right_side_rect.x + 10;
         close_rect := get_rect(close_start, 10, button_height, button_height);
         _, _, close_released := our_button(close_rect, "X", *my_theme.button_theme);
@@ -1150,12 +1192,11 @@ draw_one_frame :: (dt: float, window: Window_Type) {
     }
     if GetRect.active_widget {
         w := GetRect.active_widget;
-        print("%\n", w.*);
         need_to_rerender = true;
     }
 }
 
-draw_new_profile_selector :: (r: Rect, data: *void) {
+draw_new_profile_selector :: (state: *Subwindow_State, r: Rect, data: *void) {
     using current_program_state;
     button_height := default_button_height;
 
@@ -1202,7 +1243,7 @@ draw_new_profile_selector :: (r: Rect, data: *void) {
     for opened_windows {
         _, _, released := our_button(s, it, identifier=it_index);
         if released {
-            print("Program % selected\n", it);
+            log("Program % selected\n", it);
             subwindow_info_new_profile.open = false;
             profiles[profiles.count - 1].program = copy_string(it);
             active_search.text = "";
@@ -1218,7 +1259,7 @@ draw_new_profile_selector :: (r: Rect, data: *void) {
     end_scrollable_region(region, s.x + s.w, s.y + s.h, *scroll_value_new_profile);
 }
 
-draw_presets_confirmation :: (base_r: Rect, data: *void) {
+draw_presets_confirmation :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     using current_program_state;
     selected_preset := cast(*Preset_Data)data;
 

@@ -76,6 +76,8 @@ start_logging_keys :: () {
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc
 low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 #c_call {
     push_my_context();
+
+    using current_program_state;
     kb_input := cast(*KBDLLHOOKSTRUCT)lparam;
 
     // We ignore injected events so we don't mess with the inputs
@@ -90,7 +92,7 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
     key_scan_code := kb_input.scanCode;
 
     // 69 is numlock, just swallow it. Depend on LLKF_EXTENDED instead,
-    // because numlocked keys don't have it set...
+    // because numlocked keys don't have it set.
     if key_scan_code == 69 {
         return CallNextHookEx(null, n_code, wparam, lparam);
     }
@@ -104,17 +106,16 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
     }
 
     recorded_state := kb_real_state[key_scan_code];
-
-#if DEBUG {
-    key_name := get_key_name(key_scan_code);
-    if is_down {
-        log("Pressed: %\n", key_name);
-    } else {
-        log("Released: %\n", key_name);
-    }
-}
-
     is_repeat := recorded_state && is_down;
+
+    if runtime_debug {
+        key_name := get_key_name(key_scan_code);
+        if is_down {
+            log("Pressed: %1%2\n", key_name, ifx is_repeat then " (repeat)" else "");
+        } else {
+            log("Released: %\n", key_name);
+        }
+    }
 
     kb_real_state[key_scan_code] = is_down;
 
@@ -149,9 +150,9 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
         if is_down {
             if opposite_is_down {
                 if !is_repeat {
-#if DEBUG {
-                    log("Releasing opposite: %\n", get_key_name(bind_scan));
-}
+                    if runtime_debug {
+                        log("Releasing opposite: %\n", get_key_name(bind_scan));
+                    }
                     flags : KEYBDINPUT_Flags = .KEYEVENTF_KEYUP;
                     flags |= ifx extended then .KEYEVENTF_EXTENDEDKEY else xx 0;
                     flags |= .KEYEVENTF_SCANCODE;
@@ -166,9 +167,7 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
                         log_error("SendInput failed with error: %\n", error);
                     }
                 } else {
-#if DEBUG {
-                    log("Detected repeat event for %\n", key_name);
-}
+                    // Repeat, nothing to do.
                 }
 
                 if bind.mode == .NEUTRAL {
@@ -179,9 +178,9 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
             }
         } else {
             if opposite_is_down {
-#if DEBUG {
-                log("Pressing opposite: %\n", get_key_name(bind_scan));
-}
+                if runtime_debug {
+                    log("Pressing opposite: %\n", get_key_name(bind_scan));
+                }
                 flags : KEYBDINPUT_Flags = 0;
                 flags |= ifx extended then .KEYEVENTF_EXTENDEDKEY else xx 0;
                 flags |= .KEYEVENTF_SCANCODE;
@@ -378,7 +377,7 @@ get_list_of_programs :: () -> [..]string {
         name_lower := to_lower_copy(name,, temp);
         search_lower := to_lower_copy(active_search.text,, temp);
         if (active_search.text.count && contains(name_lower, search_lower)) || !active_search.text.count {
-            _, found := table_find(*_opened_programs, name);
+            found, _ := table_find_new(*_opened_programs, name);
             if !found {
                 copied_string := copy_string(name,, temp);
                 table_set(*_opened_programs, copied_string, true);
@@ -438,7 +437,6 @@ start_detecting_focused_program :: () {
 
 set_mapping_resolving_hook :: (instance: HINSTANCE) {
     if !mapping_resolving_hook_is_installed {
-        log("Installing the mapping resolving hook\n");
         mapping_resolving_hook = SetWindowsHookExW(WH_KEYBOARD_LL, cast(HOOKPROC)low_level_keyboard_proc, instance, 0);
         if (mapping_resolving_hook != null) {
             mapping_resolving_hook_is_installed = true;
@@ -469,12 +467,11 @@ set_key_mapping_hook :: (window: Window_Type) {
 unset_mapping_resolving_hook :: () {
     if !mapping_resolving_hook_is_installed return;
 
-    log("Unhooking mapping resolving hook\n");
-    UnhookWindowsHookEx(mapping_resolving_hook);
     // Forget buttons that are pressed before unhooking from the keyboard
     // So that when we hook again we don't end up in a dirty state where one
     // of the buttons is being stuck from the previous hook
     memset(kb_real_state.data, 0, kb_real_state.count);
+    UnhookWindowsHookEx(mapping_resolving_hook);
     mapping_resolving_hook_is_installed = false;
 }
 
@@ -591,7 +588,7 @@ create_hidden_window :: (window_name: string, parent: Window_Type = null) -> HWN
     return hwnd;
 }
 
-platform_after_window_created :: (window: HWND) -> success: bool #must {
+platform_after_window_created :: (window: HWND) -> success: bool {
     tray_window := create_hidden_window("hidden_tray_window", window);
     if !tray_window {
         log_error("Failed to create a base window for the tray icon: %\n", GetLastError());
@@ -614,7 +611,7 @@ platform_after_window_created :: (window: HWND) -> success: bool #must {
 }
 
 
-platform_init :: () -> success: bool #must, reason: string {
+platform_init :: () -> success: bool, reason: string {
     array_reserve(*_list_of_process_ids, 1000);
     _list_of_process_ids.count = 1000;
     // TODO: come up with better window class to distinguish us

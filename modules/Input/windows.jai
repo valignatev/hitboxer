@@ -20,147 +20,39 @@ set_custom_cursor_handling :: (is_custom: bool) {
 //#scope_export
 
 get_key_code :: (wParam: WPARAM) -> Key_Code {
-    if (wParam >= 48) && (wParam <= 90) return cast(Key_Code) wParam;
+    found, value := table_find_new(*vk_to_key_code, wParam);
 
-    using Key_Code;
-
-    if wParam == VK_LBUTTON
-        return MOUSE_BUTTON_LEFT;
-    if wParam == VK_MBUTTON
-        return MOUSE_BUTTON_MIDDLE;
-    if wParam == VK_RBUTTON
-        return MOUSE_BUTTON_RIGHT;
-
-    if wParam == VK_SPACE   return xx 32;
-
-    // @Incomplete: Convert this to if wParam == { ... }. Or even a lookup table of some kind.
-    if wParam == VK_HOME  return HOME;
-    if wParam == VK_END   return END;
-
-    if wParam == VK_PAUSE        return PAUSE;
-    if wParam == VK_SCROLL       return SCROLL_LOCK;
-
-    if wParam == VK_PRIOR
-        return PAGE_UP;
-    if wParam == VK_NEXT
-        return PAGE_DOWN;
-    if wParam == VK_LEFT
-        return ARROW_LEFT;
-    if wParam == VK_RIGHT
-        return ARROW_RIGHT;
-    if wParam == VK_UP
-        return ARROW_UP;
-    if wParam == VK_DOWN
-        return ARROW_DOWN;
-    if wParam == VK_MENU
-        return ALT;
-    if wParam == VK_SHIFT
-        return SHIFT;
-    if wParam == VK_CONTROL
-        return CTRL;
-    if wParam == VK_BACK
-        return BACKSPACE;
-    if wParam == VK_DELETE
-        return DELETE;
-    if wParam == VK_INSERT
-        return INSERT;
-    if wParam == VK_ESCAPE
-        return ESCAPE;
-    if wParam == VK_RETURN
-        return ENTER;
-    if wParam == VK_TAB
-        return TAB;
-
-    if wParam == VK_OEM_1  // Sigh.
-        return xx #char ";";
-    if wParam == VK_OEM_2  // Sigh.
-        return xx #char "/";
-    if wParam == VK_OEM_3
-        return xx #char "`";
-    if wParam == VK_OEM_4
-        return xx #char "[";
-    if wParam == VK_OEM_5
-        return xx #char "\\";
-    if wParam == VK_OEM_6
-        return xx #char "]";
-    if wParam == VK_OEM_7
-        return xx #char "'";
-
-    if wParam == VK_OEM_PLUS    return xx #char "+";
-    if wParam == VK_OEM_MINUS   return xx #char "-";
-    if wParam == VK_OEM_PERIOD  return xx #char ".";
-    if wParam == VK_OEM_COMMA   return xx #char ",";
-
-    if (wParam >= VK_F1) && (wParam <= VK_F16) {
-        delta := wParam - VK_F1;
-        return xx(F1 + xx delta);
-    }
-    if wParam == VK_SNAPSHOT
-        return PRINT_SCREEN;
-
+    if found return value;
     return UNKNOWN;
 }
 
 get_vk :: (key: Key_Code) -> VK: u64 {
-    using Key_Code;
+    found, value := table_find_new(*key_code_to_vk, key);
 
-    if (key >= xx 48) && (key <= xx 90) return cast(u64) key;
-
-    if key == xx 32            return  VK_SPACE;
-
-    if key == PAGE_UP          return VK_PRIOR;
-    if key == PAGE_DOWN        return VK_NEXT;
-
-    if key == ARROW_LEFT       return VK_LEFT;
-
-    if key == ARROW_RIGHT      return VK_RIGHT;
-
-    if key == ARROW_UP         return VK_UP;
-
-    if key == ARROW_DOWN       return VK_DOWN;
-
-    if key == ALT              return VK_MENU;
-    if key == SHIFT            return VK_SHIFT;
-
-    if key == CTRL             return VK_CONTROL;
-
-    if key == BACKSPACE        return VK_BACK;
-
-    if key == DELETE           return VK_DELETE;
-    if key == INSERT           return VK_INSERT;
-
-    if key == ESCAPE           return VK_ESCAPE;
-
-    if key == ENTER            return VK_RETURN;
-
-    if key == TAB              return VK_TAB;
-
-    if key == xx #char ";"     return VK_OEM_1;
-    if key == xx #char "/"     return VK_OEM_2;
-    if key == xx #char "`"     return VK_OEM_3;
-    if key == xx #char "["     return VK_OEM_4;
-    if key == xx #char "\\"    return VK_OEM_5;
-    if key == xx #char "]"     return VK_OEM_6;
-    if key == xx #char "'"     return VK_OEM_7;
-
-    if key == xx #char "+"     return VK_OEM_PLUS;
-    if key == xx #char "-"     return VK_OEM_MINUS;
-    if key == xx #char "."     return VK_OEM_PERIOD;
-    if key == xx #char ","     return VK_OEM_COMMA;
-
-    if (key >= F1) && (key <= F16) {
-        delta := key - F1;
-        return xx(VK_F1 + xx delta);
-    }
-
-    if key == PRINT_SCREEN  return VK_SNAPSHOT;
-
+    if found return value;
     return 0;
 }
 
 
-#add_context _windows_windowproc :: MyWindowProc;
-#add_context _windows_windowproc_allocator: Allocator;
+//
+// If you're on Microsoft Windows (TM), the way events work is, you create a Window of a certain
+// Window Class, and that Window Class designates the WindowProc that handles input.
+// So for this module to see events, the window must be created with that WindowProc
+// as an argument. We could make it a requirement that any module that opens windows
+// on any operating system takes a handle to the input module, but that would be
+// imposing a constraint on all programs everywhere just because Microsoft Windows
+// is being dumb. And if you follow that philosophy for everything, you make people
+// deal with the superset of all constraints on all operating systems, which is a disaster.
+// So we insulate the complication to Windows only.
+// We put MyWindowProc in the Context, and anyone who wants to open windows, on
+// the Microsoft Windows operating system, can look in the context and see if this is there.
+// If not they can use a default proc. If you want to replace the WindowProc with your own,
+// you can set context.window_proc before calling create_window....
+//
+#add_context input_handler: struct {
+    window_proc := MyWindowProc;
+    window_proc_allocator: Allocator;
+};
 
 MyWindowProc :: (hwnd: HWND, message: u32,
                  wParam: WPARAM, lParam: LPARAM) -> s64 #c_call {
@@ -249,19 +141,6 @@ MyWindowProc :: (hwnd: HWND, message: u32,
             maybe_send_vkey_event(VK_MBUTTON, message == WM_MBUTTONDOWN);
 
           case WM_MOUSEMOVE;
-            // We don't have mouse move events yet, but we'll record the delta.
-
-
-            // We use Raw Input for mouse position stuff now.
-/*
-            x := (lParam & 0xffff);
-            y := (lParam >> 16) & 0xffff;
-            mouse_delta_x += x - last_mouse_event_x;
-            mouse_delta_y += y - last_mouse_event_y;
-
-            last_mouse_event_x = x;
-            last_mouse_event_y = y;
-*/
           case WM_MOUSEWHEEL;
             event: Event;
             event.type = .MOUSE_WHEEL;
@@ -329,7 +208,7 @@ MyWindowProc :: (hwnd: HWND, message: u32,
  	 	    file_paths_count := DragQueryFileW(drop, 0xFFFFFFFF, null, 0);
             assert(file_paths_count > 0);
 
-            allocator := context._windows_windowproc_allocator;
+            allocator := context.input_handler.window_proc_allocator;
             if !allocator.proc  allocator = context.default_allocator;
             
             files: [..] string;
@@ -371,6 +250,7 @@ MyWindowProc :: (hwnd: HWND, message: u32,
 
 update_window_events :: () {
     if !initted {
+        init_key_code_tables();
         init_input_system();
         initted = true;
     }
@@ -676,3 +556,100 @@ send_key_event :: (key_code: Key_Code, key_down: bool, repeat := false) {
 
     input_button_states[key_code] |= ifx key_down then (Key_Current_State.DOWN | .START) else .END;
 }
+
+vk_to_key_code: Table(WPARAM, Key_Code);
+key_code_to_vk: Table(Key_Code, WPARAM);
+
+add_code :: (vk: WPARAM, key_code: Key_Code) {
+    // Add this code to both tables, so we can
+    // look it up in either direction.
+
+    table_add(*vk_to_key_code, vk, key_code);
+    table_add(*key_code_to_vk, key_code, vk);
+}
+
+init_key_code_tables :: () {
+    // Make tables for fast forward and inverse lookup of key codes.
+
+    // Make the tables at least kind of big so we don't flail.
+    INITIAL_TABLE_SIZE :: 512;
+    init(*vk_to_key_code, INITIAL_TABLE_SIZE);
+    init(*key_code_to_vk, INITIAL_TABLE_SIZE);
+
+    // ASCII characters:
+    for i: 48..cast(u32)90 {
+        add_code(i, cast(Key_Code) i);
+    }
+
+    // Function keys:
+    for i: VK_F1..VK_F16 {
+        delta := i - VK_F1;
+        add_code(cast(WPARAM) i, F1 + cast(Key_Code) delta);
+    }
+
+    // Numeric keypad:
+    for i: VK_NUMPAD0..VK_NUMPAD9 {
+        // We just treat these like normal numbers for the purposes
+        // of button events.
+        delta := i - VK_NUMPAD0;
+        add_code(xx i, xx (#char "0" + delta));
+    }
+    
+    // Entries defined by the array in this file:
+    for vk_to_key_code_array {
+        add_code(it.vk, it.key_code);
+    }
+}
+
+// We make a static table, and just
+// iterate over it to set the values...
+// Let's put it in global scope so people can
+// use it if they want.
+Vk_To_Key_Code :: struct {
+    vk: u32;
+    key_code: Key_Code;
+}
+
+vk_to_key_code_array :: Vk_To_Key_Code.[
+    .{ VK_LBUTTON,  MOUSE_BUTTON_LEFT },
+    .{ VK_MBUTTON,  MOUSE_BUTTON_MIDDLE },
+    .{ VK_RBUTTON,  MOUSE_BUTTON_RIGHT },
+    .{ VK_SPACE,    xx 32 },
+    .{ VK_HOME,     HOME },
+    .{ VK_END,      Key_Code.END },
+    .{ VK_PRIOR,    PAGE_UP },
+    .{ VK_NEXT,     PAGE_DOWN },
+    .{ VK_LEFT,     ARROW_LEFT },
+    .{ VK_RIGHT,    ARROW_RIGHT },
+    .{ VK_UP,       ARROW_UP},
+    .{ VK_DOWN,     ARROW_DOWN },
+    .{ VK_MENU,     ALT },
+    .{ VK_SHIFT,    SHIFT },
+    .{ VK_CONTROL,  CTRL },
+    .{ VK_BACK,     BACKSPACE },
+    .{ VK_DELETE,   DELETE },
+    .{ VK_INSERT,   INSERT },
+    .{ VK_ESCAPE,   ESCAPE },
+    .{ VK_RETURN,   ENTER },
+    .{ VK_TAB,      TAB },
+    .{ VK_OEM_1,       xx #char ";"},
+    .{ VK_OEM_2,       xx #char "/"},
+    .{ VK_OEM_3,       xx #char "`"},
+    .{ VK_OEM_4,       xx #char "["},
+    .{ VK_OEM_5,       xx #char "\\"},
+    .{ VK_OEM_6,       xx #char "]"},
+    .{ VK_OEM_7,       xx #char "'"},
+    .{ VK_OEM_PLUS,    xx #char "+" },
+    .{ VK_OEM_MINUS,   xx #char "-"    },
+    .{ VK_OEM_PERIOD,  xx #char "."     },
+    .{ VK_OEM_COMMA,   xx #char ","    },
+    .{ VK_SNAPSHOT,   PRINT_SCREEN },
+    .{ VK_PAUSE,      PAUSE },
+    .{ VK_SCROLL,     SCROLL_LOCK },
+];
+
+#scope_file;
+using,except(END) Key_Code; // Key_Current_State.END would conflict with this. Sigh.
+
+
+#import "Hash_Table";
