@@ -1,5 +1,3 @@
-#load "modules/Control_Flow/or_return_build.jai";
-
 build :: () {
     w := compiler_create_workspace("Target Program");
     if !w {
@@ -40,7 +38,6 @@ build :: () {
     add_build_file("./main.jai", w);
 
     add_build_string(tprint("DEBUG :: %;", ifx !optimized then "true" else "false"), w);
-    or_return_add_source(w);
 
     while true {
         message := compiler_wait_for_message();
@@ -51,10 +48,6 @@ build :: () {
                 case "Input";
                 provide_import(message.workspace, m, .PATH_TO_DIRECTORY, modules_dir);
             }
-            case .TYPECHECKED;
-            typechecked := cast(*Message_Typechecked) message;
-            or_return_handle_typechecked(typechecked);
-
             case .COMPLETE;
             break;
         }
@@ -86,3 +79,4 @@ build :: () {
 
 #import "Basic";
 #import "Compiler";
+#import "String";

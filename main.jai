@@ -105,14 +105,15 @@ Mapping_Mode :: enum u32 {
     NEUTRAL;
 }
 
-Bind_Kind :: enum u32 {
+Device_Type :: enum u32 {
     KEYBOARD;
     MOUSE;
     CONTROLLER;
 }
 
 Mapping_Bind :: struct {
-    kind: Bind_Kind;
+    // TODO: rename to device_type
+    kind: Device_Type;
     mode: Mapping_Mode;
     code: u32;
 }

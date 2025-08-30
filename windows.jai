@@ -33,6 +33,27 @@ key_name_buffer: [301]u16;
 // GetAsyncKeyState is not available in low level keyboard procedures, so we need to maintain our own.
 kb_real_state: [57856]bool; // whether the key is pressed on a physical keyboard
 
+// We're settings a separate temporary storage for windows hook callbacks.
+// We're resettings it on unsettings the hooks. MSDN says that hooks are getting called in the context
+// of the thread that installed them, so it should be fine???
+windows_temporary_storage: Temporary_Storage;
+windows_temporary_storage_data: [TEMPORARY_STORAGE_SIZE] u8 #align 64;
+
+push_my_windows_context :: () #expand {
+    // Copy-paste from push_my_context.
+    // Not calling it directly because backticks will put stuff into this macro scope, instead of into the actual
+    // caller.
+    `my_context: #Context;
+    `my_context.logger = my_logger;
+    ts := *windows_temporary_storage;
+    if (ts.data == null) {
+        set_initial_data(ts, TEMPORARY_STORAGE_SIZE, windows_temporary_storage_data.data);
+    }
+    `my_context.temporary_storage = ts;
+
+    `push_context,defer_pop my_context;
+}
+
 tray_info: NOTIFYICONDATAW;
 
 scan_code_to_lparam :: (scan_code: u32) -> u32 {
@@ -74,9 +95,11 @@ start_logging_keys :: () {
 
 // TODO: Try to find a way to be more optimal (like bailing out earlier) on key repeats:
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc
+// TODO: teamp allocator leaks here because temp storage is not initialized on the context.
+// I don't want to do heavy context initialization in low_level_keyboard_proc though. This procedure
+// needs to be as fast as possible.
 low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 #c_call {
-    push_my_context();
-
+    push_my_windows_context();
     using current_program_state;
     kb_input := cast(*KBDLLHOOKSTRUCT)lparam;
 
@@ -202,7 +225,7 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
 
 mapping_setting_hook_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 #c_call {
     using current_program_state;
-    push_my_context();
+    push_my_windows_context();
     key_virtual_code := wparam;
     // How to interpret lparam: https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input
     hiword := (lparam >> 16) & 0xffff;
@@ -294,7 +317,7 @@ detect_focused_program :: (
     id_event_thread: u32,
     dwms_event_time: u32
 ) #c_call {
-    push_my_context();
+    push_my_windows_context();
     using current_program_state;
     inspected_window := GetForegroundWindow();
     process_id: u32 = 0;
@@ -473,6 +496,9 @@ unset_mapping_resolving_hook :: () {
     memset(kb_real_state.data, 0, kb_real_state.count);
     UnhookWindowsHookEx(mapping_resolving_hook);
     mapping_resolving_hook_is_installed = false;
+    // Unsetting a hook seems like a fitting place to reset windows temp storage.
+    push_my_windows_context();
+    reset_temporary_storage();
 }
 
 unset_mapping_setting_hook :: () {
@@ -480,6 +506,9 @@ unset_mapping_setting_hook :: () {
     log("Unhooking mapping setting hook\n");
     UnhookWindowsHookEx(mapping_setting_hook);
     mapping_setting_hook_is_installed = false;
+    // Unsetting a hook seems like a fitting place to reset windows temp storage.
+    push_my_windows_context();
+    reset_temporary_storage();
 }
 
 get_dpi_scale :: (window: Window_Type) -> float {
@@ -509,7 +538,7 @@ platform_hide_to_tray :: (window: HWND) {
 tray_proc :: (hwnd: HWND, message: u32, wParam: WPARAM, lParam: LPARAM) -> s64 #c_call {
 
     exit_menu : u64 = 100;
-    push_my_context();
+    push_my_windows_context();
     if message == {
         case WM_APP + 1; {
             if lParam == {
