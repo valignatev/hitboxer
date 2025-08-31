@@ -696,6 +696,7 @@ main :: () {
     maybe_fixup_settings();
     active_profile = active_profile_in_ui;
 
+    if close_to_tray platform_hide_to_tray(the_window);
     quit := false;
     while !quit {
         // memory_visualizer_per_frame_update();

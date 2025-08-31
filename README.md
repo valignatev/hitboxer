@@ -39,7 +39,7 @@ Profiles - every profile is a program for which Hitboxer is active. Click "Add",
 
 Mappings - Add keyboard mappings that will be active for this program. For now, we only support mapping keyboard keys to other keyboard keys, but there is a plan to support mouse and controllers.
 
-Mappings can be of 3 flavors - OPPOSITE (the last one you pressed wins, good for frame-perfect turnarounds and strafes), NEUTRAL (both keys cancel each other out), and REMAP (the basic mapping, you press key on the left, and key on the right comes out instead).
+Mappings can be of 4 flavors - OPPOSITE (the last one you pressed wins, good for frame-perfect turnarounds and strafes), NEUTRAL (both keys cancel each other out), REMAP (the basic mapping, you press key on the left, and key on the right comes out instead), and OPPOSITE WITH NOT REPRESSES - just like OPPOSITE, but it does not repress the opposite button after you release the winning one.
 
 Presets for WASD and Arrows
 
