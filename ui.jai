@@ -46,6 +46,16 @@ arrow :: (base_rect: GR.Rect, state: *GR.Dropdown_State, theme: *GR.Dropdown_The
     );
 
     color := my_theme.button_theme.frame_color;
+    if mapping_mode == .OPPOSITE || mapping_mode == .REMAP {
+        // GREEN
+        color.y += 0.4;
+    } else if mapping_mode == .OPPOSITE_NO_REPRESS {
+        // BLUE
+        color.z += 0.4;
+    } else if mapping_mode == .NEUTRAL {
+        // RED
+        color.x += 0.4;
+    }
     color = lerp(color, dropdown_button_theme.frame_color_over,  over_factor);
     color = lerp(color, dropdown_button_theme.frame_color_down,  down_effect_t);
     color = lerp(color, dropdown_button_theme.frame_color_flash, pressed_factor);
@@ -55,11 +65,11 @@ arrow :: (base_rect: GR.Rect, state: *GR.Dropdown_State, theme: *GR.Dropdown_The
     base_x := r.x;
 
     arrow_width := r.w * 0.25;
-    if mapping_mode == .OPPOSITE {
+    if mapping_mode == .OPPOSITE || mapping_mode == .OPPOSITE_NO_REPRESS {
         Simp.immediate_triangle(
-                .{base_x + arrow_width, base_y,            0},
-                .{base_x              , base_y + base_h/2, 0},
-                .{base_x + arrow_width, base_y + base_h,   0},
+            .{base_x + arrow_width, base_y,            0},
+            .{base_x              , base_y + base_h/2, 0},
+            .{base_x + arrow_width, base_y + base_h,   0},
             color,
             color,
             color,
@@ -79,11 +89,11 @@ arrow :: (base_rect: GR.Rect, state: *GR.Dropdown_State, theme: *GR.Dropdown_The
         color,
     );
 
-    if mapping_mode == .REMAP || mapping_mode == .OPPOSITE {
+    if mapping_mode == .REMAP || mapping_mode == .OPPOSITE || mapping_mode == .OPPOSITE_NO_REPRESS {
         Simp.immediate_triangle(
-                .{base_x + r.w,               base_y           , 0},
-                .{base_x + r.w + arrow_width, base_y + base_h/2, 0},
-                .{base_x + r.w,               base_y + base_h  , 0},
+            .{base_x + r.w,               base_y           , 0},
+            .{base_x + r.w + arrow_width, base_y + base_h/2, 0},
+            .{base_x + r.w,               base_y + base_h  , 0},
             color,
             color,
             color,

@@ -705,7 +705,7 @@ main :: () {
         last_time = current_time;
 
         if !need_to_rerender {
-            platform_wait_for_message();
+            need_to_rerender = platform_wait_for_message();
         }
         Input.update_window_events();
 
@@ -743,9 +743,10 @@ main :: () {
         if active_state == .NOTHING {
             unset_mapping_setting_hook();
         }
-
-        draw_one_frame(dt, the_window);
-
+        if need_to_rerender {
+            draw_one_frame(dt, the_window);
+        }
+        // Maybe only reset it if we render?
         reset_temporary_storage();
     }
 }

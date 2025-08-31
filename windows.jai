@@ -26,6 +26,7 @@ MAX_PATH_LENGTH :: MAX_PATH;
 HIDDEN_WINDOW_CLASS := "HIDDEN_WINDOW_CLASS";
 mapping_resolving_hook: HHOOK;
 mapping_setting_hook: HHOOK;
+windows_hook_happened := false;
 
 // TODO: these buffers should probably be thread(context)-locals. Just in case...
 key_name_buffer: [301]u16;
@@ -103,6 +104,7 @@ _repeat_counter := 0;
 low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 #c_call {
     push_my_windows_context();
     using current_program_state;
+    windows_hook_happened = true;
     kb_input := cast(*KBDLLHOOKSTRUCT)lparam;
 
     // We ignore injected events so we don't mess with the inputs
@@ -137,12 +139,12 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
         key_name := get_key_name(key_scan_code);
         if is_down {
             if is_repeat && _repeat_counter < 1 {
-                log("Pressed: %1 (repeat)\n", key_name);
+                log("Pressed: % (repeat)\n", key_name);
                 // Insane overflow protection!
                 if _repeat_counter == 1000000 _repeat_counter = 1;
                 _repeat_counter += 1;
             } else if !is_repeat {
-                log("Pressed: %1\n", key_name);
+                log("Pressed: %\n", key_name);
             }
         } else {
             log("Released: %\n", key_name);
@@ -330,6 +332,7 @@ detect_focused_program :: (
 ) #c_call {
     push_my_windows_context();
     using current_program_state;
+    windows_hook_happened = true;
     inspected_window := GetForegroundWindow();
     process_id: u32 = 0;
     GetWindowThreadProcessId(inspected_window, *process_id);
@@ -665,11 +668,15 @@ platform_init :: () -> success: bool, reason: string {
 }
 
 
-// TODO: low level kb hooks trigger WaitMessage unblocking, causing
+// NOTE: window hooks trigger WaitMessage unblocking, potentially causing
 // the window to rerender for no reason. The best thing to do is to have a separate
-// rendering thread anyway, but maybe there's some short-term easy W I can take?
-platform_wait_for_message :: inline () {
+// rendering thread anyway, but for now we're tracking a special flag that we only set from within
+// hook callbacks and clear here.
+platform_wait_for_message :: inline () -> need_to_rerender: bool {
     WaitMessage();
+    need_to_rerender := !windows_hook_happened;
+    windows_hook_happened = false;
+    return need_to_rerender;
 }
 
 
