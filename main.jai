@@ -40,7 +40,7 @@ the_window: Window_Type;
 log_file: File;
 the_window_hidden := false;
 window_width := 900;
-window_height := 750;
+window_height := 800;
 
 current_theme: s32 = xx Default_Themes.Default;
 my_theme: Overall_Theme;  // This gets filled out by calling the Theme_Proc for current_theme.
@@ -881,6 +881,23 @@ draw_one_frame :: (dt: float, window: Window_Type) {
 
             next_y = r.y + r.h;
         }
+
+#if DEBUG {
+        // Debug view to see if we're rerendering.
+        {
+            pulse_rect := get_rect(padding, next_y + padding, 100, button_height);
+            theme := pulsating_button_theme;
+            _, state, _ := button(pulse_rect, "", *theme);
+
+            // Updating production value 3 times a frame so that it pulsates really fast!
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
+
+            next_y = pulse_rect.y + pulse_rect.h;
+        }
+}
+
     }
 
     // Scuffed separator
@@ -1117,22 +1134,6 @@ draw_one_frame :: (dt: float, window: Window_Type) {
 
         next_y = r.y + r.h;
     }
-
-#if DEBUG {
-    // Debug view to see if we're rerendering.
-    {
-        pulse_rect := get_rect(padding, next_y + padding, 100, button_height);
-        theme := pulsating_button_theme;
-        _, state, _ := button(pulse_rect, "", *theme);
-
-        // Updating production value 3 times a frame so that it pulsates really fast!
-        update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-        update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-        update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-
-        next_y = pulse_rect.y + pulse_rect.h;
-    }
-}
 
     //
     // New Profile subwindow
