@@ -93,9 +93,11 @@ start_logging_keys :: () {
 }
 
 
+// This is just to not spam runtime debug logs.
+// TODO: probably store this is a part of the status on the key itself (see Key experiment in main.jai)
+_repeat_counter := 0;
 // TODO: Try to find a way to be more optimal (like bailing out earlier) on key repeats:
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc
-// TODO: teamp allocator leaks here because temp storage is not initialized on the context.
 // I don't want to do heavy context initialization in low_level_keyboard_proc though. This procedure
 // needs to be as fast as possible.
 low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 #c_call {
@@ -134,9 +136,17 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
     if runtime_debug {
         key_name := get_key_name(key_scan_code);
         if is_down {
-            log("Pressed: %1%2\n", key_name, ifx is_repeat then " (repeat)" else "");
+            if is_repeat && _repeat_counter < 1 {
+                log("Pressed: %1 (repeat)\n", key_name);
+                // Insane overflow protection!
+                if _repeat_counter == 1000000 _repeat_counter = 1;
+                _repeat_counter += 1;
+            } else if !is_repeat {
+                log("Pressed: %1\n", key_name);
+            }
         } else {
             log("Released: %\n", key_name);
+            _repeat_counter = 0;
         }
     }
 
@@ -166,7 +176,7 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
         // Returning non-zero means that we don't want the original key to get propagated
         return 1;
     }
-    if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL {
+    if bind.mode == .OPPOSITE || bind.mode == .OPPOSITE_NO_REPRESS || bind.mode == .NEUTRAL {
         // Get the state of the opposite key
         opposite_is_down := kb_real_state[bind.code];
 
@@ -200,9 +210,10 @@ low_level_keyboard_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s64 
 
             }
         } else {
-            if opposite_is_down {
+            // OPPOSITE_NO_REPRESS means, well, NO REPRESS!
+            if opposite_is_down && bind.mode != .OPPOSITE_NO_REPRESS {
                 if runtime_debug {
-                    log("Pressing opposite: %\n", get_key_name(bind_scan));
+                    log("Re-pressing opposite: %\n", get_key_name(bind_scan));
                 }
                 flags : KEYBDINPUT_Flags = 0;
                 flags |= ifx extended then .KEYEVENTF_EXTENDEDKEY else xx 0;
@@ -266,7 +277,7 @@ mapping_setting_hook_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s6
                 active_mapping.*.source.code = key_scan_code;
                 table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
 
-                if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL {
+                if active_mapping.mode == .OPPOSITE || active_mapping.mode == .OPPOSITE_NO_REPRESS || active_mapping.mode == .NEUTRAL {
                     table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
                     table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                 }
@@ -290,7 +301,7 @@ mapping_setting_hook_proc :: (n_code: s32, wparam: WPARAM, lparam: LPARAM) -> s6
                 active_mapping.*.destination.code = key_scan_code;
 
                 table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
-                if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL {
+                if active_mapping.mode == .OPPOSITE || active_mapping.mode == .OPPOSITE_NO_REPRESS || active_mapping.mode == .NEUTRAL {
                     table_remove(*active_profile_in_ui.mappings, old_destination_code);
                     table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                 }
@@ -654,6 +665,9 @@ platform_init :: () -> success: bool, reason: string {
 }
 
 
+// TODO: low level kb hooks trigger WaitMessage unblocking, causing
+// the window to rerender for no reason. The best thing to do is to have a separate
+// rendering thread anyway, but maybe there's some short-term easy W I can take?
 platform_wait_for_message :: inline () {
     WaitMessage();
 }

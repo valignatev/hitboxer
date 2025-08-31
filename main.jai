@@ -102,7 +102,26 @@ Platform :: enum u32 {
 Mapping_Mode :: enum u32 {
     REMAP;
     OPPOSITE;
+    OPPOSITE_NO_REPRESS;
     NEUTRAL;
+}
+
+// Doing it separately, because you can't do #run inside of square brackets as of 2025-08-31
+MAPPING_MODE_COUNT :: #run -> s64 {
+    ti := type_info(Mapping_Mode);
+    assert(ti.type == .ENUM, "What the fuck are you doing?");
+    return ti.values.count;
+}
+
+MAPPING_MODE_NAMES :: #run -> [MAPPING_MODE_COUNT]string {
+    ti := type_info(Mapping_Mode);
+    assert(ti.type == .ENUM, "What the fuck are you doing?");
+    result: [MAPPING_MODE_COUNT]string;
+    for ti.names {
+        result[it_index] = replace(it, "_", " ");
+    }
+
+    return result;
 }
 
 Device_Type :: enum u32 {
@@ -132,6 +151,21 @@ Mappings :: Table(u32, Mapping_Bind, /*hash_function*/);
 operator== :: (a: Mapping_Bind, b: Mapping_Bind) -> bool {
     if a.code == b.code && a.mode == b.mode && a.kind == b.kind return true;
     return false;
+}
+
+#if 0 {
+    Mapping2 :: struct {
+        key: *Key; // #as using key maybe?
+        mode: Mapping_Mode;
+    }
+
+    Key :: struct {
+        scancode: u32;
+        device_type: Device_Type;
+        state: bool; // Pressed or released
+        name: string;
+        mappings: []Mapping2; // ???
+    }
 }
 
 Profile :: struct {
@@ -453,6 +487,10 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                                 mapping.mode = .OPPOSITE;
                                 mapping_bind.mode = .OPPOSITE;
                             }
+                            case "OPPOSITE_NO_REPRESS"; {
+                                mapping.mode = .OPPOSITE_NO_REPRESS;
+                                mapping_bind.mode = .OPPOSITE_NO_REPRESS;
+                            }
                             case "NEUTRAL"; {
                                 mapping.mode = .NEUTRAL;
                                 mapping_bind.mode = .NEUTRAL;
@@ -462,7 +500,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                                 mapping_bind.mode = .REMAP;
                             }
                             case;
-                                tfh.error(*handler, "Incorrect mapping mode, ignoring it. Expected one of OPPOSITE|NEUTRAL|REMAP, got %\n", mapping_mode);
+                                tfh.error(*handler, "Incorrect mapping mode, ignoring it. Expected one of OPPOSITE|OPPOSITE_NO_REPRESS|NEUTRAL|REMAP, got %\n", mapping_mode);
                                 continue;
                         }
                     }
@@ -500,7 +538,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                     table_set(*profile.mappings, source, mapping_bind);
                     array_add(*profile.mappings_array, mapping);
 
-                    if mapping.mode == .OPPOSITE {
+                    if mapping.mode == .OPPOSITE || mapping.mode == .OPPOSITE_NO_REPRESS {
                         table_set(*profile.mappings, mapping.destination.code, mapping.source);
                     }
 
@@ -991,8 +1029,6 @@ draw_one_frame :: (dt: float, window: Window_Type) {
         dropdown_theme.theme_for_current_choice.rectangle_shape.rounding_flags = 0;
         dropdown_theme.theme_for_current_value.text_color = my_theme.button_theme.surface_color;
 
-        type_info_mapping_mode := type_info(Mapping_Mode);
-
         for * mapping: active_profile_in_ui.mappings_array {
             button_width := (s.w - 50)/3 - 1;
             source_rect := get_rect(s.x, s.y, button_width, button_height);
@@ -1015,7 +1051,14 @@ draw_one_frame :: (dt: float, window: Window_Type) {
             }
 
             mode_rect := get_rect(s.x + source_rect.w + 1, s.y, button_width, button_height);
-            changed, mode_state := our_dropdown(mode_rect, type_info_mapping_mode.names, xx *mapping.mode, dropdown_theme, identifier=mapping.source.code, disable_press=(active_mapping != mapping && active_state != .NOTHING));
+            changed, mode_state := our_dropdown(
+                mode_rect,
+                choices=MAPPING_MODE_NAMES,
+                current_value_pointer=xx *mapping.mode,
+                theme=dropdown_theme,
+                identifier=mapping.source.code,
+                disable_press=(active_mapping != mapping && active_state != .NOTHING),
+            );
 
             // HACK: we might be reusing the leaked dropdown state with the same hash, left after removing a mapping with the same code
             // so test for null pointer. Need a better way to clear stale states, or remove current_value_pointer from it
@@ -1030,11 +1073,11 @@ draw_one_frame :: (dt: float, window: Window_Type) {
                 active_mapping.*.destination.mode = new_mode;
 
                 if new_mode == .REMAP {
-                    if old_mode == .OPPOSITE || old_mode == .NEUTRAL {
+                    if old_mode == .OPPOSITE || old_mode == .OPPOSITE_NO_REPRESS || old_mode == .NEUTRAL {
                         table_remove(*active_profile_in_ui.mappings, destination_ptr.code);
                     }
 
-                } else if new_mode == .OPPOSITE || new_mode == .NEUTRAL {
+                } else if new_mode == .OPPOSITE || new_mode == .OPPOSITE_NO_REPRESS || new_mode == .NEUTRAL {
                     if old_mode == .REMAP {
                         table_set(*active_profile_in_ui.mappings, destination_ptr.code, .{mode=new_mode, code=mapping.source.code, kind=mapping.source.kind});
                     } else {
@@ -1183,7 +1226,7 @@ draw_one_frame :: (dt: float, window: Window_Type) {
     if index_to_remove >= 0 {
         mapping_to_remove := active_profile_in_ui.mappings_array[index_to_remove];
         table_remove(*active_profile_in_ui.mappings, mapping_to_remove.source.code);
-        if mapping_to_remove.mode == .OPPOSITE || mapping_to_remove.mode == .NEUTRAL {
+        if mapping_to_remove.mode == .OPPOSITE || mapping_to_remove.mode == .OPPOSITE_NO_REPRESS || mapping_to_remove.mode == .NEUTRAL {
             table_remove(*active_profile_in_ui.mappings, mapping_to_remove.destination.code);
         }
         array_ordered_remove_by_index(*active_profile_in_ui.mappings_array, index_to_remove);

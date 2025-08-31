@@ -221,13 +221,79 @@ our_dropdown :: (r: Rect, choices: [] string, current_value_pointer: *s32, theme
         state.z                     = z;
     }
 
-    GR.add_popup(draw_dropdown_popup, state, state.z);
+    GR.add_popup(our_draw_dropdown_popup, state, state.z);
     changed := current_value_pointer.* != state.original_value;
     if changed {
         state.original_value = current_value_pointer.*;
     }
     return changed, state;
 }
+
+
+our_draw_dropdown_popup :: (_state: *void) {
+    state := cast(*Dropdown_State) _state;
+    if !state.open return;
+
+    GR.start_using_state(state);
+    defer GR.stop_using_state(state);
+
+    r := state.base_rect;
+
+    occluder_start(state, r);
+
+    theme                 := state.theme;
+    current_value_pointer := state.current_value_pointer;
+    choices               := state.choices;
+
+    choice_theme := *theme.theme_for_each_choice;
+    label_each_choice := choice_theme.label_theme;
+
+    current_value := current_value_pointer.*;
+
+    // For now, assume the choices are the same height as the current value display.
+    s := r;
+    s.y += r.h;
+
+    // @NOTE(valigo): fork draw_dropdown_popup to make it wider, because some of my options don't fit.
+    // Ideally, make it stretch automatically, because we can get the width of prepared text.
+    s.w *= 2;
+    s.x -= r.w/2;
+
+    top_y    := s.y;
+    bottom_y := s.y;
+
+    pick_choice := -1;
+    if state.open {
+        for choices {
+            sub_hash := get_hash(#location(), it_index);
+            choice_hash := combine_hashes(state.hash, sub_hash);
+
+            t := choice_theme;
+            if (cast(s32) it_index) == current_value  t = *theme.theme_for_current_choice;
+
+            pressed, _, released := button(s, it, t, xx,no_check choice_hash, state.loc);
+            bottom_y = s.y;
+            s.y += s.h;
+
+            if released {
+                pick_choice = it_index;
+            }
+        }
+
+        if pick_choice >= 0 {
+            state.open = false;
+            current_value_pointer.* = cast(s32) pick_choice;
+            update_action_durations(state.current_value_state, *theme.theme_for_current_value, true, 0);
+        }
+    }
+
+    s.h = bottom_y - top_y;
+    s.y = bottom_y;   // Undo the y motion from the final choice.
+    occluded := bound(r, s);
+    occluder_finish(state, occluded);
+}
+
+
 
 #scope_file
 
