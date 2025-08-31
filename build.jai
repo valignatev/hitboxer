@@ -20,7 +20,7 @@ build :: () {
         if arg == {
             case "release";
             optimized = true;
-            set_optimization(*target_options, .VERY_OPTIMIZED);
+            set_optimization(*target_options, .VERY_OPTIMIZED, preserve_debug_info=false);
         }
     }
 
