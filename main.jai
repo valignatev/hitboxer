@@ -297,7 +297,12 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
     now := current_time_consensus();
     calendar_utc := to_calendar(now, .UTC);
     date_s := calendar_to_string(calendar_utc);
-    formatted_message := tprint("%: %", date_s, message);
+    formatted_message: string;
+    if message[message.count - 1] != #char "\n" {
+        formatted_message = tprint("%: %\n", date_s, message);
+    } else {
+        formatted_message = tprint("%: %", date_s, message);
+    }
 
     length, success := file_length(log_file);
     if !success {
