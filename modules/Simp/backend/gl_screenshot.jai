@@ -57,7 +57,7 @@ get_bitmap_from_texture :: (map: *Texture, format:=Texture_Format.Unknown, width
 // Call pixel_read_is_done() to know whether the read has finished, in which case,
 // when you call pixel_read_end() it will return very quickly. Otherwise, pixel_read_end()
 // will block until the screenshot is done.
-pixel_read_begin :: (source: *Texture /* may be null */, dest_format: Texture_Format, width: s32 = -1, height: s32 = -1, srgb := false, flip := false) -> *Pixel_Read #must {
+pixel_read_begin :: (source: *Texture /* may be null */, dest_format: Texture_Format, width: s32 = -1, height: s32 = -1, srgb := false, flip := false) -> *Pixel_Read {
     assert((dest_format == .RGB8) || (dest_format == .RGBA8));
     
     reader := New(Pixel_Read);  // @Cleanup: Don't use the heap?

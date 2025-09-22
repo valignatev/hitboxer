@@ -863,7 +863,7 @@ copy_glyph_to_bitmap :: (face: FT_Face, data: *Glyph_Data) {
 find_or_create_glyph :: (using font: *Dynamic_Font,
                          utf32: u32, glyph_index: u32, hash_key: int) -> *Glyph_Data {
 
-    data, success := table_find(*font.glyph_lookup, hash_key);
+    success, data := table_find_new(*font.glyph_lookup, hash_key);
     if success  return data;
 
     face := font.private1;  // XXX Why not using?

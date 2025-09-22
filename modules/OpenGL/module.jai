@@ -121,7 +121,7 @@ load_extensions :: (procs: *$T) -> success := false  {
     ti_ext := cast(*Type_Info_Struct) type_info(T);
     for m: ti_ext.members {
         if m.type.type == .BOOL {
-            _, ext_found := table_find(*gl_available_extensions, m.name);
+            ext_found, _ := table_find_new(*gl_available_extensions, m.name);
             ti := m.type;
             is_avail_ptr := cast(*bool)((cast(*u8)procs) + m.offset_in_bytes);
             is_avail_ptr.* = ext_found;

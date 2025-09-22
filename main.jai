@@ -720,9 +720,9 @@ main :: () {
     active_profile = active_profile_in_ui;
 
     // TODO: Need to separate detecting focused program and setting up keyboard hook. Probably...
-    // start_detecting_focused_program();
+    start_detecting_focused_program();
 
-    // start_logging_keys();
+    start_logging_keys();
 
     Simp.set_render_target(the_window, .LEFT_HANDED);
     init_fonts(the_window);
@@ -730,15 +730,6 @@ main :: () {
 
     subwindow_info_new_profile.open = false;
     subwindow_info_presets_confirmation.open = false;
-
-    // @note: Parsed settings are baked by the memory from raw_settings. So I just don't free it
-    // to avoid corruptions. A bit of a silly optimizations, but why not lmao.
-    should_parse_config, raw_settings, settings_filename := init_settings();
-    if should_parse_config {
-        parse_settings(raw_settings, settings_filename);
-    }
-    maybe_fixup_settings();
-    active_profile = active_profile_in_ui;
 
     if close_to_tray platform_hide_to_tray(the_window);
     quit := false;
@@ -751,6 +742,7 @@ main :: () {
 
         if !need_to_rerender {
             need_to_rerender = platform_wait_for_message();
+            // need_to_rerender = true;
         }
 
         JDL.update_window_events();

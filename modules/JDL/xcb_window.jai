@@ -380,6 +380,10 @@ xcb_set_window_title :: (window: *Window, title: string) {
 }
 
 
+// TODO: I think in xcb implementation we can straight up use xcb_wait_for_event
+// directly to block and wait, because under the hood it does pretty much the same -
+// polls on a socked with just some additional locking and ref-counting. So maybe all of this
+// can be removed.
 xcb_wait_for_events :: (display: *Display) {
     // xcb_check_usage(null, display);
 
@@ -593,7 +597,8 @@ xcb_update_window_events :: (display: *Display) {
             case XCB_PROPERTY_NOTIFY;
                 ev := cast(*xcb_property_notify_event_t) pending_event;
                 state := cast(xcb_property_t) ev.state;
-                log("property_notify(window=% atom=% state=%)", ev.window, atom_name(d, ev.atom), state);
+                // TODO: [DEBUG] logging tier
+                // log("property_notify(window=% atom=% state=%)", ev.window, atom_name(d, ev.atom), state);
 
                 if ev.window != d.clipboard.window || state != .NEW_VALUE || !d.clipboard.large_incoming_tranfer {
                     continue;
@@ -856,7 +861,7 @@ xcb_clipboard_set_text :: (display: *Display, text: string) {
 #scope_file
 
 atom_name :: (d: *XCB_Display, atom: xcb_atom_t) -> string {
-    name, found := table_find(*d.atom_names, atom);
+    found, name := table_find_new(*d.atom_names, atom);
     if found return name;
 
     xcb_err: *xcb_generic_error_t;

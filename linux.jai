@@ -7,6 +7,7 @@ DEFAULT_WINDOW_CREATION_COLOR :: float.[.15,.15,.2];
 DEFAULT_MSAA: s32 : 4;
 
 uinput_fd: s32 = -1;
+virtual_device_path: string;
 
 // This might backfire, because this is configurable on Linux
 // Might want to allocate it at runtime instead
@@ -29,6 +30,7 @@ get_dpi_scale :: (window: Window_Type) -> float {
     return 1;
 }
 
+// TODO: Maybe this should just run in the main thread and it's fine.
 detect_focused_program :: () {
     using current_program_state;
     // @TODO: Might be useful to detect currently focused program at the start.
@@ -38,7 +40,14 @@ detect_focused_program :: () {
     // and then quickly switch back to the game within like 500 milliseconds.
     // I haven't been able to pull this off on Linux, but Windows is too slow
     // to attach all needed hooks.
-    con := JDL.main_display.xcb.handle;
+    con := xcb_connect(null, null);
+    con_errors := xcb_connection_has_error(con);
+
+    if con_errors {
+        log_error("Can't connect to X11 with xcb in order to detect focused windows, error cocde is: %\n", con_errors);
+        return;
+    }
+
     net_active_atom: xcb_atom_t;
     net_name_old_atom: xcb_atom_t;
     active := "_NET_ACTIVE_WINDOW";
@@ -295,7 +304,7 @@ read_entire_proc_info :: () -> [..]u8 {
     return data;
 }
 
-is_virtual_device :: (path: string) -> bool {
+is_our_virtual_device :: (path: string) -> bool {
     devices_raw := read_entire_proc_info();
     defer array_free(devices_raw);
     devices_str : string = xx devices_raw;
@@ -339,6 +348,8 @@ start_logging_keys_in_a_thread :: (arg: *void) -> *void #c_call {
 
         libinput_dispatch(libinput);
         while event := libinput_get_event(libinput) {
+
+            event_type := libinput_event_get_type(event);
             handle_libinput_event(event, uinput_fd);
             libinput_event_destroy(event);
         }
@@ -368,6 +379,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
         if device_name == virtual_device_path {
             uinput_device_created = false;
+            log("hitboxer virtual device was removed\n");
         }
     }
     else if event_type == .LIBINPUT_EVENT_KEYBOARD_KEY {
@@ -376,7 +388,9 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         state := libinput_event_keyboard_get_key_state(keyboard_event);
         device := libinput_event_get_device(event);
         device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
-        // print("device_name: %\n", device_name);
+
+        // If the event comes from the virtual device we ourselves registered - we ignore it completely.
+        if device_name == virtual_device_path return;
 
         // Reconstruct input_event from libinput_event.
         input_events[0] = input_event.{
@@ -399,10 +413,12 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         // Pass the real event into our virtual device.
         defer if write_original {
 
-            // print("writing_original: %\n", key);
+            print("writing_original: %\n", key);
             written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
             if written < 0 {
                 log_error("Could not pass the event on\n");
+            } else {
+                print("written: %\n", written);
             }
 
             // We're updating xkb state here for handling Numlock correctly, but we don't
@@ -429,7 +445,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     old_source_code := active_mapping.source.code;
                     if old_source_code == KEY_RESERVED next_state = .SETTING_DESTINATION;
 
-                    old_binding_from_old_source, found := table_find(*active_profile_in_ui.mappings, old_source_code);
+                    found, old_binding_from_old_source := table_find_new(*active_profile_in_ui.mappings, old_source_code);
                     print("Old source is %\n", old_binding_from_old_source);
 
                     active_mapping.*.source.code = ev.code;
@@ -507,7 +523,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL {
             opposing_code := bind.code;
 
-            device_fd, found := table_find(*libinput_opened_devices, device_name);
+            found, device_fd := table_find_new(*libinput_opened_devices, device_name);
             if !found {
                 log_error("Can't get an open file descriptor for %\n", device_name);
                 return;
@@ -568,9 +584,8 @@ start_logging_keys :: () {
 }
 
 start_detecting_focused_program_in_a_thread :: (arg: *void) -> *void #c_call {
-    push_context {
-        detect_focused_program();
-    }
+    push_my_context();
+    detect_focused_program();
     return null;
 }
 
@@ -716,15 +731,22 @@ platform_hide_to_tray :: (window: Window_Type) {
 
 libinput_opened_devices: Table(string, s32);
 uinput_device_created := false;
-virtual_device_path: string;
 
 open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call {
     push_my_context();
     path := to_string(path_raw);
 
-    if !uinput_device_created && is_virtual_device(path) {
+    // open_restricted could get called twice for the same device - first normally, when libinput initializes,
+    // and another time, when device capabilities change. For example, when we add/remove keys from our virtual
+    // device. So this little condition should be re-entrant, otherwise we have a chance of grabbing our virtual
+    // device below and lock the user from using their real devices, which is not good!
+    if is_our_virtual_device(path) {
         uinput_device_created = true;
-        virtual_device_path = path;
+        // TODO: Don't use default allocator
+        // TODO: potential leak if virtual device path changes for whatever reason.
+        if virtual_device_path && virtual_device_path != path {
+            virtual_device_path = copy_string(path);
+        }
 
         print("Bailed out of multiplexing a virtual keyboard %\n", path);
         return -1;
@@ -734,27 +756,30 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
 
     table_add(*libinput_opened_devices, path, fd);
     if is_keyboard(fd, path) && uinput_fd > 0 {
-        print("%\n", path);
-        // grab_result := ioctl(fd, EVIOCGRAB, 1);
-        // if grab_result < 0 {
-        //     log_error("Could not grab % for controlling its inputs\n", path);
-        // }
+        print("grabbing %\n", path);
+        grab_result := ioctl(fd, EVIOCGRAB, 1);
+        if grab_result < 0 {
+            log_error("Could not grab % for controlling its inputs\n", path);
+        }
         return fd;
     }
     // TODO: port device closing shenanigans that offload it into a separate thread.
-    // close(fd);
+    close(fd);
     return -1;
 }
 
 close_restricted :: (fd: s32, user_data: *void) #c_call {
+    push_my_context();
+    print("closing fd:%\n", fd);
     close(fd);
 }
 
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
-platform_init :: () -> success: bool #must, init_reason: string {
+platform_init :: () -> success: bool, init_reason: string {
     {
         uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK);
+        print("uinput_fd:%\n", uinput_fd);
 
         if uinput_fd < 0 {
             code, s := System.get_error_value_and_string();
@@ -800,7 +825,7 @@ platform_init :: () -> success: bool #must, init_reason: string {
             error_string := tprint("Couldn't setup a virtual keyboard: %, %\n", code, s);
             return false, error_string;
         }
-        // Should I really call destroy? Seems like Linux destroys my virtual keyboard anyway
+        // TODO: Should I really call destroy? Seems like Linux destroys my virtual keyboard anyway
         result = ioctl(uinput_fd, UI_DEV_CREATE);
         if result == -1 {
             code, s := System.get_error_value_and_string();
@@ -832,7 +857,7 @@ platform_init :: () -> success: bool #must, init_reason: string {
     return true, "";
 }
 
-platform_after_window_created :: (window: Window_Type) -> bool #must {
+platform_after_window_created :: (window: Window_Type) -> bool {
     return true;
 }
 
@@ -844,6 +869,11 @@ platform_deinit :: (window: Window_Type) {
 
 platform_wake_up_main_thread :: () {
     //
+}
+
+platform_wait_for_message :: inline () -> need_to_rerender: bool {
+    JDL.wait_for_events();
+    return true;
 }
 
 libc :: #system_library "libc";
