@@ -5314,4 +5314,4 @@ xcb_total_written :: (c: *xcb_connection_t) -> u64 #foreign libxcb;
 
 #scope_file
 
-libxcb :: #system_library "libxcb";
+libxcb :: #library,system "libxcb";

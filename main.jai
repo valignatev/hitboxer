@@ -1,8 +1,7 @@
 /*
-~~TODOS~~
-FOR SHIPPING:
-- Finalize settings when the program quits
-
+TODO:
+- instead of logging to file directly from log calls, save logs to an intermediate array
+  and then consume them in a separate thread that will actually write to a file.
 FOR FUTURE:
 - Add configurable delay before overriding an input
 - Disallow multiple binds for the same button
@@ -286,6 +285,8 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
+// TODO: I need to recycle log.txt, because at the moment I just keep piling stuff
+// onto it without ever clearing it. So it might just grow infinitely.
 my_logger :: (message: string, data: *void, info: Log_Info) {
 
 #if DEBUG {

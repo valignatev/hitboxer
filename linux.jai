@@ -9,6 +9,9 @@ DEFAULT_MSAA: s32 : 4;
 uinput_fd: s32 = -1;
 virtual_device_path: string;
 
+focused_programs_thread: Thread;
+event_handling_thread: Thread;
+
 // This might backfire, because this is configurable on Linux
 // Might want to allocate it at runtime instead
 MAX_PATH_LENGTH :: 4096;
@@ -31,7 +34,8 @@ get_dpi_scale :: (window: Window_Type) -> float {
 }
 
 // TODO: Maybe this should just run in the main thread and it's fine.
-detect_focused_program :: () {
+// TODO: maybe memory leaks - I think I need to free all pointers that xcb returns manually
+detect_focused_program :: (thread: *Thread) -> error_code: s64 {
     using current_program_state;
     // @TODO: Might be useful to detect currently focused program at the start.
     // Theoretically, it would always be us, but there's actually a possibility
@@ -45,7 +49,7 @@ detect_focused_program :: () {
 
     if con_errors {
         log_error("Can't connect to X11 with xcb in order to detect focused windows, error cocde is: %\n", con_errors);
-        return;
+        return con_errors;
     }
 
     net_active_atom: xcb_atom_t;
@@ -58,7 +62,7 @@ detect_focused_program :: () {
 
     if !active_reply {
         log_error("Can't get _NET_ACTIVE_WINDOW atom, error is: %\n", active_error.*);
-        return;
+        return active_error.error_code;
     }
 
     net_active_atom = active_reply.atom;
@@ -74,11 +78,14 @@ detect_focused_program :: () {
     change_error := xcb_request_check(con, change_cookie);
     if change_error {
         log_error("Failed to listen to window focus events, error is %\n", change_error.*);
+        c_free(change_error);
     }
 
     xcb_flush(con);
 
     while true {
+        defer reset_temporary_storage();
+
         event := xcb_wait_for_event(con);
         if !event {
             log_error("I/O error while getting a window focused event");
@@ -134,6 +141,8 @@ detect_focused_program :: () {
             }
         }
     }
+
+    return 0;
 }
 
 _opened_programs: [..]string;
@@ -330,8 +339,7 @@ is_our_virtual_device :: (path: string) -> bool {
     return false;
 }
 
-start_logging_keys_in_a_thread :: (arg: *void) -> *void #c_call {
-    push_my_context();
+start_logging_keys_in_a_thread :: (thread: *Thread) -> s64 {
     fd := libinput_get_fd(libinput);
     // TODO: apparently, libinput doesn't handle gamepads. So I need to open and add them to
     // this descriptor set myself. Sadge.
@@ -341,9 +349,13 @@ start_logging_keys_in_a_thread :: (arg: *void) -> *void #c_call {
         0
     };
     while true {
+        // TODO: restructure global keyboard handling in a way that it does not need to allocate anything at all,
+        // and hence does not need to reset temp storage.
+        defer reset_temporary_storage();
         poll_result := poll(*fds, 1, -1);
         if poll_result <= 0 {
             log_error("libinput is cooked: % (ERROR REASON HERE)\n", errno());
+            continue;
         }
 
         libinput_dispatch(libinput);
@@ -355,11 +367,16 @@ start_logging_keys_in_a_thread :: (arg: *void) -> *void #c_call {
         }
     }
 
-    return null;
+    return 0;
 }
 
 handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
-
+    // nuke_timer_start_ticking();
+    /* (in a separate thread that managed the timer
+       if nuke_timer > 5 seconds {
+           ungrab_the_fuck_out();
+       }
+    */
     // NOTE: It doesn't look like libinput passes us SYN events from the queue, so we have to
     // recreate it manually. it doesn't pass those HID events either. I wonder if it's fine to
     // just ignore them anyway?
@@ -387,6 +404,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         key := libinput_event_keyboard_get_key(keyboard_event);
         state := libinput_event_keyboard_get_key_state(keyboard_event);
         device := libinput_event_get_device(event);
+        // TODO: get rid of this
         device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
 
         // If the event comes from the virtual device we ourselves registered - we ignore it completely.
@@ -413,12 +431,9 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         // Pass the real event into our virtual device.
         defer if write_original {
 
-            print("writing_original: %\n", key);
             written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
             if written < 0 {
                 log_error("Could not pass the event on\n");
-            } else {
-                print("written: %\n", written);
             }
 
             // We're updating xkb state here for handling Numlock correctly, but we don't
@@ -579,19 +594,15 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
 }
 
 start_logging_keys :: () {
-    tid: pthread_t;
-    pthread_create(*tid, null, start_logging_keys_in_a_thread, null);
-}
-
-start_detecting_focused_program_in_a_thread :: (arg: *void) -> *void #c_call {
-    push_my_context();
-    detect_focused_program();
-    return null;
+    event_handling_thread.starting_context.logger = my_logger;
+    thread_init(*event_handling_thread, start_logging_keys_in_a_thread);
+    thread_start(*event_handling_thread);
 }
 
 start_detecting_focused_program :: () {
-    tid: pthread_t ;
-    pthread_create(*tid, null, start_detecting_focused_program_in_a_thread, null);
+    focused_programs_thread.starting_context.logger = my_logger;
+    thread_init(*focused_programs_thread, detect_focused_program);
+    thread_start(*focused_programs_thread);
 }
 
 unset_mapping_setting_hook :: () {
@@ -763,14 +774,13 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
         }
         return fd;
     }
+
     // TODO: port device closing shenanigans that offload it into a separate thread.
     close(fd);
     return -1;
 }
 
 close_restricted :: (fd: s32, user_data: *void) #c_call {
-    push_my_context();
-    print("closing fd:%\n", fd);
     close(fd);
 }
 
@@ -779,7 +789,6 @@ interface_: libinput_interface = .{open_restricted, close_restricted};
 platform_init :: () -> success: bool, init_reason: string {
     {
         uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK);
-        print("uinput_fd:%\n", uinput_fd);
 
         if uinput_fd < 0 {
             code, s := System.get_error_value_and_string();
@@ -887,3 +896,4 @@ using JDL :: #import "JDL";
 #import "xcb";
 #import "libxkbcommon";
 #import "Input";
+#import "Thread";

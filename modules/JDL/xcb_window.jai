@@ -450,10 +450,21 @@ xcb_update_window_events :: (display: *Display) {
         pending_event = xcb_poll_for_event(d.handle);
     }
 
+    // poll_for_event docs say you need to free it, code in
+    // https://gitlab.freedesktop.org/xorg/lib/libxcb/-/blob/master/src/xcb_in.c
+    // shows that it's malloc-allocated as well, and it never frees. So we do this here.
+    // It would be really nice to have Jai-native X11 protocol bindings where we can use custom
+    // allocators and be happy, but maybe X11 will finally die before this becomes a pressing
+    // matter (This will never happen, because Wayland is shit).
+    defer if pending_event {
+        c_free(pending_event);
+    }
+
     expect_more_events := false;
     elapsed_time := seconds_since_init();
     while pending_event != null || (expect_more_events && elapsed_time < 1.0) {
         defer {
+            if pending_event c_free(pending_event);
             pending_event = xcb_poll_for_event(d.handle);
         }
 
