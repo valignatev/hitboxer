@@ -36,6 +36,8 @@ scroll_value_new_profile: float;
 
 the_window: *Window;
 log_file: File;
+
+max_log_file_size := 1000_000;
 the_window_hidden := false;
 window_width: s32 = 900;
 window_height: s32 = 800;
@@ -285,8 +287,64 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
-// TODO: I need to recycle log.txt, because at the moment I just keep piling stuff
-// onto it without ever clearing it. So it might just grow infinitely.
+// TODO: THREAD SAFETY - now, at least on linux, this shit will get called from 3 different
+// threads and it will spectacularly collapse! The solution is to log everything into an array that
+// a separate thread for logging will consume and call this logger, which doesn't have to be
+// thread-safe on its own.
+
+// When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
+// delete everything else from the beginning;
+file_partial_copy :: (data: *void, info: Log_Info) {
+    error_info := info;
+    error_info.common_flags |= .ERROR;
+
+    #if OS == .LINUX {
+        sendfile :: (out_fd: s32, in_fd: s32, offset: *s64, count: u64) -> s64 #foreign libc;
+
+        file_in := fileno(log_file.handle);
+        new_log_file, success := file_open("./log_new.txt", for_writing=true);
+
+        if !success {
+            // MessageBox on windows?
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+            return;
+        }
+
+        file_out := fileno(new_log_file.handle);
+        log_size:, success = file_length(log_file);
+        offset := log_size - (max_log_file_size * 0.1).(s64);
+
+        size : u64 = 100_000;
+        if success {
+            size = (max_log_file_size * 0.1).(u64);
+        }
+
+        result := sendfile(file_out, file_in, *offset, size);
+
+        if result == -1 {
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+            return;
+        }
+
+        file_close(*log_file);
+
+        // This doesn't do any error reporting lol
+        file_move("./log_new.txt", "./log.txt");
+
+        log_file, success = file_open("./log.txt", for_writing=true, keep_existing_content=true);
+
+        if !success {
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+        }
+
+        success = file_write(*log_file, "\n**********\n".data, "\n**********\n".count);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_write\n", data, info);
+            return;
+        }
+    }
+}
+
 my_logger :: (message: string, data: *void, info: Log_Info) {
 
 #if DEBUG {
@@ -322,7 +380,17 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
 
     }
     if length {
-        success := file_set_position(log_file, length);
+        if length > max_log_file_size {
+            file_partial_copy(data, info);
+        }
+
+        length=, success := file_length(log_file);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_length after truncation\n", data, info);
+            return;
+        }
+
+        success = file_set_position(log_file, length);
         if !success {
             runtime_support_default_logger("Couldn't write to the log file: file_set_position\n", data, info);
             return;
@@ -1451,3 +1519,4 @@ tfh :: #import "Text_File_Handler";
 #import "File";
 #import "File_Utilities";
 #import "Control_Flow";
+
