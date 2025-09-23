@@ -769,7 +769,7 @@ main :: () {
         immediate_flush            = Simp.immediate_flush,
     };
 
-    the_window = create_window(window_width, window_height, "Hitboxer v0.12", window_class="hitboxer");
+    the_window = create_window(window_width, window_height, "Hitboxer v0.13", window_class="hitboxer");
 
     // I want to init everything after the Window, because if there's an error, I want to potentially
     // show it in the window, instead of yelling in the terminal like some pussy ass Linux nerd.
