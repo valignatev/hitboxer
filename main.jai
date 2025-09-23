@@ -1,7 +1,4 @@
 /*
-TODO:
-- instead of logging to file directly from log calls, save logs to an intermediate array
-  and then consume them in a separate thread that will actually write to a file.
 FOR FUTURE:
 - Add configurable delay before overriding an input
 - Disallow multiple binds for the same button
@@ -109,13 +106,13 @@ Mapping_Mode :: enum u32 {
 // Doing it separately, because you can't do #run inside of square brackets as of 2025-08-31
 MAPPING_MODE_COUNT :: #run -> s64 {
     ti := type_info(Mapping_Mode);
-    assert(ti.type == .ENUM, "What the fuck are you doing?");
+    assert(ti.type == .ENUM);
     return ti.values.count;
 }
 
 MAPPING_MODE_NAMES :: #run -> [MAPPING_MODE_COUNT]string {
     ti := type_info(Mapping_Mode);
-    assert(ti.type == .ENUM, "What the fuck are you doing?");
+    assert(ti.type == .ENUM);
     result: [MAPPING_MODE_COUNT]string;
     for ti.names {
         result[it_index] = replace(it, "_", " ");
@@ -311,9 +308,11 @@ file_partial_copy :: (data: *void, info: Log_Info) {
         }
 
         file_out := fileno(new_log_file.handle);
+
+        // TODO: This is kind of stupid because it moves some random part of the log instead
+        //  of being on at a line boundary.
         log_size:, success = file_length(log_file);
         offset := log_size - (max_log_file_size * 0.1).(s64);
-
         size : u64 = 100_000;
         if success {
             size = (max_log_file_size * 0.1).(u64);
