@@ -7,10 +7,14 @@ DEFAULT_WINDOW_CREATION_COLOR :: float.[.15,.15,.2];
 DEFAULT_MSAA: s32 : 4;
 
 uinput_fd: s32 = -1;
+test_uinput_fd: s32 = -1;
 virtual_device_path: string;
+grab_timer_fd: s32;
+grab_timer_test_passed := true;
 
 focused_programs_thread: Thread;
 event_handling_thread: Thread;
+timers_thread: Thread;
 
 // This might backfire, because this is configurable on Linux
 // Might want to allocate it at runtime instead
@@ -29,7 +33,7 @@ minor :: inline (dev: u64) -> u64 {
 }
 
 get_dpi_scale :: (window: Window_Type) -> float {
-    // @TODO: Implement
+    // TODO: Implement
     return 1;
 }
 
@@ -330,7 +334,10 @@ is_our_virtual_device :: (path: string) -> bool {
                 get_handlers = true;
             }
             if get_handlers && begins_with(prop, "H: Handlers=") {
-                handlers := split(slice(prop, 12, prop.count), " ",, temp);
+                handlers := split(slice(prop, 12, prop.count), " ");
+                // TODO: dynamic allocation
+                defer array_free(handlers);
+
                 result := array_find(handlers, target_event);
                 return result;
             }
@@ -407,8 +414,11 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         // TODO: get rid of this
         device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
 
-        // If the event comes from the virtual device we ourselves registered - we ignore it completely.
-        if device_name == virtual_device_path return;
+        // I want it to be at the very end so that this check does not delay
+        // actual input handling. This is a super-tiny-micro-nano optimization.
+        defer if key == 0x70 {
+            grab_timer_test_passed = true;
+        }
 
         // Reconstruct input_event from libinput_event.
         input_events[0] = input_event.{
@@ -593,6 +603,63 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
     }
 }
 
+handle_timers :: (thread: *Thread) -> s64 {
+    pfd: [1]pollfd;
+    pfd[0].fd = grab_timer_fd;
+    pfd[0].events = POLLIN;
+
+    control_events: [4]input_event;
+    control_events[0] = input_event.{
+        time=.{},
+        type=EV_KEY,
+        code=cast(u16)0x70,
+        value=xx 1,
+    };
+    control_events[1] = input_event.{
+        time=.{},
+        type=EV_SYN,
+        code=SYN_REPORT,
+        value=0,
+    };
+    control_events[2] = input_event.{
+        time=.{},
+        type=EV_KEY,
+        code=cast(u16)0x70,
+        value=xx 0,
+    };
+    control_events[3] = input_event.{
+        time=.{},
+        type=EV_SYN,
+        code=SYN_REPORT,
+        value=0,
+    };
+    while true {
+        poll(pfd.data, xx pfd.count, -1);
+
+        if pfd[0].revents & POLLIN {
+            // handle ungrabs
+            value: s64;
+            read(grab_timer_fd, *value, 8);
+
+            if grab_timer_test_passed {
+                grab_timer_test_passed = false;
+                written := write(test_uinput_fd, control_events.data, size_of(input_event) * control_events.count);
+                if written < 0 {
+                    log_error("Could not send control events\n");
+                }
+                print("WE ARE ALIVE\n");
+
+                continue;
+            } else {
+                // TODO: implement actual ungrabbing logic
+                print("UNGRAB ME SENPAI\n");
+            }
+            print("AHHHH IM TIMING %\n", value);
+        }
+    }
+    return 0;
+}
+
 start_logging_keys :: () {
     event_handling_thread.starting_context.logger = my_logger;
     thread_init(*event_handling_thread, start_logging_keys_in_a_thread);
@@ -759,11 +826,13 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
             virtual_device_path = copy_string(path);
         }
 
-        print("Bailed out of multiplexing a virtual keyboard %\n", path);
         return -1;
     }
 
     fd := open(path_raw, flags);
+    if fd == -1 {
+        // TODO: input group error message
+    }
 
     table_add(*libinput_opened_devices, path, fd);
     if is_keyboard(fd, path) && uinput_fd > 0 {
@@ -840,6 +909,54 @@ platform_init :: () -> success: bool, init_reason: string {
             code, s := System.get_error_value_and_string();
             error_string := tprint("Couldn't create a virtual keyboard: %, %\n", code, s);
             return false, error_string;
+        }
+
+        // Test keyboard to check if we are cooked
+        test_uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK);
+        result = ioctl(test_uinput_fd, UI_SET_EVBIT, EV_KEY);
+
+        result = ioctl(test_uinput_fd, UI_SET_KEYBIT, 0x70);
+        if result == -1 {
+            log_error("Couldn't set keybit: %\n", 0x70);
+        }
+
+
+        usetup2: uinput_setup;
+        usetup2.id.bustype = BUS_USB;
+        usetup2.id.vendor = 0x7666;
+        usetup2.id.product = 0x7665;
+        usetup2.name = xx "SOCD safety keyboard".data;
+
+        result = ioctl(test_uinput_fd, UI_DEV_SETUP, *usetup2);
+        result = ioctl(test_uinput_fd, UI_DEV_CREATE);
+    }
+
+    // Timers stuff
+    {
+        grab_timer_fd = timerfd_create(xx clockid_t.CLOCK_MONOTONIC, 0);
+        if grab_timer_fd == -1 {
+            // TODO: errno
+            log_error("Could not create an ungrab timer. You might be in danger!\n");
+        } else {
+            timer_spec: itimerspec;
+            timer_spec.it_value = .{tv_sec=5};
+            timer_spec.it_interval = .{tv_sec=5};
+
+            result := timerfd_settime(
+                __ufd=grab_timer_fd,
+                __flags=0,
+                __utmr=*timer_spec,
+                __otmr=null,
+            );
+
+            if result == -1 {
+                // TODO: errno
+                log_error("Could not start an ungrab timer. You might be in danger!\n");
+            } else {
+                timers_thread.starting_context.logger = my_logger;
+                thread_init(*timers_thread, handle_timers);
+                thread_start(*timers_thread);
+            }
         }
     }
 
