@@ -8,7 +8,7 @@ DEFAULT_MSAA: s32 : 4;
 
 uinput_fd: s32 = -1;
 test_uinput_fd: s32 = -1;
-virtual_device_path: string;
+virtual_device_sysname: string;
 grab_timer_fd: s32;
 grab_timer_test_passed := true;
 
@@ -35,6 +35,77 @@ minor :: inline (dev: u64) -> u64 {
 get_dpi_scale :: (window: Window_Type) -> float {
     // TODO: Implement
     return 1;
+}
+
+
+// TODO: only supports keyboards for now, support other device types when it is time
+create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[]) -> success: bool, fd: s32 {
+    fd := open("/dev/uinput", O_RDWR | O_NONBLOCK);
+
+    if fd < 0 {
+        code, s := System.get_error_value_and_string();
+        // TODO: better error - hint the user at which exactly they need to configure in udev
+        error_string := tprint("Could not open \"/dev/uinput\" for creating a virtual device %, error: %\n", name, s);
+        error_string = tprint("% Reopen the program with root privileges, or configure required udev rules\n", error_string);
+        log_error("%", error_string);
+        return false, -1;
+    }
+
+    result := ioctl(fd, UI_SET_EVBIT, EV_KEY);
+    if result == -1 {
+        code, s := System.get_error_value_and_string();
+        log_error("Coulnd't initialize virtual device %: %, %\n", name, code, s);
+        return false, -1;
+    }
+
+    if key_codes {
+        for key_codes {
+            result := ioctl(fd, UI_SET_KEYBIT, it);
+            if result == -1 {
+                log_error("Couldn't set keybit on %: %\n", name, it);
+            }
+        }
+    } else {
+        // Here I'm just trying to create a virtual keyboard with enough keys to hopefully
+        // cover most usecases. It would be more reliable to first accumulate the union of all
+        // available keys in open_restricted, and then use those keys here. But this is ok for now.
+        // Inclusive intentionally
+        for KEY_ESC..cast(u32)KEY_MICMUTE {
+            result := ioctl(fd, UI_SET_KEYBIT, it);
+            if result == -1 {
+                log_error("Couldn't set keybit on %: %\n", name, it);
+            }
+        }
+        for KEY_FN..cast(u32)KEY_FN_RIGHT_SHIFT {
+            result := ioctl(fd, UI_SET_KEYBIT, it);
+            if result == -1 {
+                log_error("Couldn't set keybit on %: %\n", name, it);
+            }
+        }
+    }
+
+    usetup: uinput_setup;
+    usetup.id.bustype = BUS_USB;
+    usetup.id.vendor = 0x6666;
+    usetup.id.product = 0x6665;
+    usetup.name = xx name.data;
+
+    result = ioctl(fd, UI_DEV_SETUP, *usetup);
+    if result == -1 {
+        code, s := System.get_error_value_and_string();
+        log_error("Couldn't setup a virtual device %: %, %\n", name, code, s);
+        return false, -1;
+    }
+
+    // TODO: Should I really call destroy? Seems like Linux destroys my virtual keyboard anyway
+    result = ioctl(fd, UI_DEV_CREATE);
+    if result == -1 {
+        code, s := System.get_error_value_and_string();
+        log_error("Couldn't create a virtual device %: %, %\n", name, code, s);
+        return false, -1;
+    }
+
+    return true, fd;
 }
 
 // TODO: Maybe this should just run in the main thread and it's fine.
@@ -317,7 +388,7 @@ read_entire_proc_info :: () -> [..]u8 {
     return data;
 }
 
-is_our_virtual_device :: (path: string) -> bool {
+is_our_virtual_keyboard :: (path: string) -> bool {
     devices_raw := read_entire_proc_info();
     defer array_free(devices_raw);
     devices_str : string = xx devices_raw;
@@ -330,7 +401,7 @@ is_our_virtual_device :: (path: string) -> bool {
     for devices {
         device_props := split(it, "\n");
         for prop: device_props {
-            if prop == "N: Name=\"SOCD keyboard\"" {
+            if prop == "N: Name=\"Hitboxer keyboard\"" {
                 get_handlers = true;
             }
             if get_handlers && begins_with(prop, "H: Handlers=") {
@@ -378,12 +449,6 @@ start_logging_keys_in_a_thread :: (thread: *Thread) -> s64 {
 }
 
 handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
-    // nuke_timer_start_ticking();
-    /* (in a separate thread that managed the timer
-       if nuke_timer > 5 seconds {
-           ungrab_the_fuck_out();
-       }
-    */
     // NOTE: It doesn't look like libinput passes us SYN events from the queue, so we have to
     // recreate it manually. it doesn't pass those HID events either. I wonder if it's fine to
     // just ignore them anyway?
@@ -393,27 +458,25 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
     output_events: [2]input_event;
     input_events: [2]input_event;
     write_original := true;
+
     event_type := libinput_event_get_type(event);
+    device := libinput_event_get_device(event);
+    device_sysname := to_string(libinput_device_get_sysname(device));
+
     if event_type == .LIBINPUT_EVENT_POINTER_BUTTON {
         pointer_event := libinput_event_get_pointer_event(event);
-        // printf ("pointer button event\n");
     }
     else if event_type == .LIBINPUT_EVENT_DEVICE_REMOVED {
-        device := libinput_event_get_device(event);
-        device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
-        if device_name == virtual_device_path {
+        if device_sysname == virtual_device_sysname {
             uinput_device_created = false;
             log("hitboxer virtual device was removed\n");
+            // TODO: ungrab everything here and maybe shutdown idk.
         }
     }
     else if event_type == .LIBINPUT_EVENT_KEYBOARD_KEY {
         keyboard_event := libinput_event_get_keyboard_event(event);
         key := libinput_event_keyboard_get_key(keyboard_event);
         state := libinput_event_keyboard_get_key_state(keyboard_event);
-        device := libinput_event_get_device(event);
-        // TODO: get rid of this
-        device_name := tprint("/dev/input/%", to_string(libinput_device_get_sysname(device)));
-
         // I want it to be at the very end so that this check does not delay
         // actual input handling. This is a super-tiny-micro-nano optimization.
         defer if key == 0x70 {
@@ -444,8 +507,14 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
             written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
             if written < 0 {
                 log_error("Could not pass the event on\n");
+            } else {
+                // If we successfully wrote to an input fd, consider that we are alive unconditionally.
+                // TODO: Is there a way to test that our virtual device is not grabbed?
+                grab_timer_test_passed = true;
             }
 
+            // TODO: This should not be in an input handler. This shoudl be in some other place that
+            //  is maybe on another thread (like, logger), that logs pressed keys in debug mode.
             // We're updating xkb state here for handling Numlock correctly, but we don't
             // even take advantage of that, because numpad keys are specialcased in get_key_name anyway
             // So maybe we don't even need to update the state at all. At least until we have a proper
@@ -548,9 +617,9 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL {
             opposing_code := bind.code;
 
-            found, device_fd := table_find_new(*libinput_opened_devices, device_name);
+            found, device_fd := table_find_new(*libinput_opened_devices, device_sysname);
             if !found {
-                log_error("Can't get an open file descriptor for %\n", device_name);
+                log_error("Can't get an open file descriptor for %\n", device_sysname);
                 return;
             }
             key_bit_result := ioctl(device_fd, EVIOCGKEY(key_bits.count), *key_bits);
@@ -604,6 +673,13 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
 }
 
 handle_timers :: (thread: *Thread) -> s64 {
+    // If our input handling code cucked itself into a total system hardlock
+    // where we are grabbing all of the keyboard but not passing any of input
+    // further down, we need some kind of a safety net to ungrab devices if
+    // this happens. This logic implements a separate thread and a timer that
+    // sends a special secret keyboard code to a separate virtual keyboard,
+    // and then checks if this code got received and acknowledged. If we
+    // don't see it happening, we just ungrab everything we grabbed previously.
     pfd: [1]pollfd;
     pfd[0].fd = grab_timer_fd;
     pfd[0].events = POLLIN;
@@ -637,7 +713,7 @@ handle_timers :: (thread: *Thread) -> s64 {
         poll(pfd.data, xx pfd.count, -1);
 
         if pfd[0].revents & POLLIN {
-            // handle ungrabs
+            // Handle Ungrabs in case our input handler gets stuck or something else
             value: s64;
             read(grab_timer_fd, *value, 8);
 
@@ -647,14 +723,24 @@ handle_timers :: (thread: *Thread) -> s64 {
                 if written < 0 {
                     log_error("Could not send control events\n");
                 }
-                print("WE ARE ALIVE\n");
 
                 continue;
             } else {
-                // TODO: implement actual ungrabbing logic
-                print("UNGRAB ME SENPAI\n");
+                // TODO: This will try to ungrab every healthcheck cycle, I should probably only do it once.
+                //  like, change grab_timer_test_passed to a three-way enum.
+                log_error(S(
+                    "Our input handler did not pass a healthcheck and likely hardlocked ",
+                    "you for few seconds, so we recovered from this disaster.\n",
+                    "Please submit an issue to Github with relevant log.txt parts attached. ",
+                    "Sorry for the inconvenience!\n",
+                ));
+                for fd, sysname: libinput_opened_devices {
+                    ungrab_result := ioctl(fd, EVIOCGRAB, 0);
+                    if ungrab_result < 0 {
+                        log_error("Could not ungrab %\n", sysname);
+                    }
+                }
             }
-            print("AHHHH IM TIMING %\n", value);
         }
     }
     return 0;
@@ -807,23 +893,33 @@ platform_hide_to_tray :: (window: Window_Type) {
 
 }
 
+// This is a table of "eventFOO" (obtained from libinput_device_get_sysname) to an opened file descriptor
 libinput_opened_devices: Table(string, s32);
 uinput_device_created := false;
 
+// TODO: memory leak because of temp allocations from #c_call
+// TODO: path_raw gets allocated by udev, and it keeps the memory if I return an fd from
+//  this function. If I return -1, path_raw gets deallocated internally. So adding paths of devices
+//  that I grab to hash table works and is safe, but it is quite sketchy, and I'm not sure if this is a
+//  guaranteed behavior. I need to have some kind of custom string arena where I can hold these device paths
+//  on my own and do not depend on this indirection.
 open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call {
+
     push_my_context();
     path := to_string(path_raw);
+    path_split := split(path, "/");
+    sysname := path_split[path_split.count-1];
 
     // open_restricted could get called twice for the same device - first normally, when libinput initializes,
     // and another time, when device capabilities change. For example, when we add/remove keys from our virtual
     // device. So this little condition should be re-entrant, otherwise we have a chance of grabbing our virtual
     // device below and lock the user from using their real devices, which is not good!
-    if is_our_virtual_device(path) {
+    if is_our_virtual_keyboard(path) {
         uinput_device_created = true;
         // TODO: Don't use default allocator
         // TODO: potential leak if virtual device path changes for whatever reason.
-        if virtual_device_path && virtual_device_path != path {
-            virtual_device_path = copy_string(path);
+        if virtual_device_sysname != path {
+            virtual_device_sysname = copy_string(sysname);
         }
 
         return -1;
@@ -834,9 +930,9 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
         // TODO: input group error message
     }
 
-    table_add(*libinput_opened_devices, path, fd);
     if is_keyboard(fd, path) && uinput_fd > 0 {
-        print("grabbing %\n", path);
+        table_add(*libinput_opened_devices, sysname, fd);
+        log("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
         grab_result := ioctl(fd, EVIOCGRAB, 1);
         if grab_result < 0 {
             log_error("Could not grab % for controlling its inputs\n", path);
@@ -856,79 +952,15 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
+    // Virtual devices stuff
     {
-        uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK);
-
-        if uinput_fd < 0 {
-            code, s := System.get_error_value_and_string();
-            // TODO: better error - hint the user at which exactly they need to configure in udev
-            error_string := tprint("Could not open \"/dev/uinput\" for creating a virtual keyboard, error: %\n", s);
-            error_string = tprint("% Reopen the program with root privileges, or configure required udev rules\n", error_string);
-            return false, error_string;
-        }
-
-        result := ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY);
-        if result == -1 {
-            code, s := System.get_error_value_and_string();
-            error_string := tprint("Coulnd't initialize virtual keyboard: %, %\n", code, s);
-            return false, error_string;
-        }
-
-        // Here I'm just trying to create a virtual keyboard with enough keys to hopefully
-        // cover most usecases. It would be more reliable to first accumulate the union of all
-        // available keys in open_restricted, and then use those keys here. But this is ok for now.
-        // Inclusive intentionally
-        for KEY_ESC..cast(u32)KEY_MICMUTE {
-            result := ioctl(uinput_fd, UI_SET_KEYBIT, it);
-            if result == -1 {
-                log_error("Couldn't set keybit: %\n", it);
-            }
-        }
-        for KEY_FN..cast(u32)KEY_FN_RIGHT_SHIFT {
-            result := ioctl(uinput_fd, UI_SET_KEYBIT, it);
-            if result == -1 {
-                log_error("Couldn't set keybit: %\n", it);
-            }
-        }
-
-        usetup: uinput_setup;
-        usetup.id.bustype = BUS_USB;
-        usetup.id.vendor = 0x6666;
-        usetup.id.product = 0x6665;
-        usetup.name = xx "SOCD keyboard".data;
-
-        result = ioctl(uinput_fd, UI_DEV_SETUP, *usetup);
-        if result == -1 {
-            code, s := System.get_error_value_and_string();
-            error_string := tprint("Couldn't setup a virtual keyboard: %, %\n", code, s);
-            return false, error_string;
-        }
-        // TODO: Should I really call destroy? Seems like Linux destroys my virtual keyboard anyway
-        result = ioctl(uinput_fd, UI_DEV_CREATE);
-        if result == -1 {
-            code, s := System.get_error_value_and_string();
-            error_string := tprint("Couldn't create a virtual keyboard: %, %\n", code, s);
-            return false, error_string;
+        success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
+        if !success {
+            return false, "Could not create a virtual keyboard, nothing will work\n";
         }
 
         // Test keyboard to check if we are cooked
-        test_uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK);
-        result = ioctl(test_uinput_fd, UI_SET_EVBIT, EV_KEY);
-
-        result = ioctl(test_uinput_fd, UI_SET_KEYBIT, 0x70);
-        if result == -1 {
-            log_error("Couldn't set keybit: %\n", 0x70);
-        }
-
-
-        usetup2: uinput_setup;
-        usetup2.id.bustype = BUS_USB;
-        usetup2.id.vendor = 0x7666;
-        usetup2.id.product = 0x7665;
-        usetup2.name = xx "SOCD safety keyboard".data;
-
-        result = ioctl(test_uinput_fd, UI_DEV_SETUP, *usetup2);
-        result = ioctl(test_uinput_fd, UI_DEV_CREATE);
+        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[0x70]);
     }
 
     // Timers stuff
@@ -1002,8 +1034,9 @@ platform_wait_for_message :: inline () -> need_to_rerender: bool {
     return true;
 }
 
-libc :: #system_library "libc";
+libc :: #library,system "libc";
 c_free :: (memory: *void) #foreign libc "free";
+sendfile :: (out_fd: s32, in_fd: s32, offset: *s64, count: u64) -> s64 #foreign libc;
 
 #import "Memory";
 #import "POSIX";
@@ -1014,3 +1047,4 @@ using JDL :: #import "JDL";
 #import "libxkbcommon";
 #import "Input";
 #import "Thread";
+#import "Helpers";

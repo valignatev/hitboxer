@@ -296,8 +296,6 @@ file_partial_copy :: (data: *void, info: Log_Info) {
     error_info.common_flags |= .ERROR;
 
     #if OS == .LINUX {
-        sendfile :: (out_fd: s32, in_fd: s32, offset: *s64, count: u64) -> s64 #foreign libc;
-
         file_in := fileno(log_file.handle);
         new_log_file, success := file_open("./log_new.txt", for_writing=true);
 
