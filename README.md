@@ -55,6 +55,13 @@ Yep, functionality of this program is similar to those evil keyloggers that stea
 
 Almost done, but I need to polish it a bit more before I can comfortably release it!
 
+Required dependencies other than glibc which is pretty much installed everywhere unless you probably an Alpine user (in which case you are used to suffering anyway):
+```
+libxcb and its xkb integrations (xcb-xkb, libxkbcommon-x11), libinput, libudev, EGL Opengl drivers (mesa should just work(tm)), libxkbcommon
+```
+
+And that's it - I'm trying to keep Linux dependencies down to minimal so distribution is easier. There are also couple other 3rd-party dependencies, but those are compiled in statically. Just for completeness sake, here they are: freetype, stb_image, stb_image_resize, stb_image_write.
+
 ## Compiling from source code
 
 Hitboxer is written in Jai, so in order to compile it you will need access to Jai compiler, which is at the time of writing is in closed beta.

@@ -36,7 +36,6 @@ load_procs :: (procs: *$T, libnames: []string, loaded: *bool, procs_prefix: stri
     name_buffer: [4098]u8;
     if loaded.* return true;
 
-    loaded.* = false;
     for libname : libnames {
         dlerror();
         lib := dlopen(temp_c_string(libname), RTLD_NOW);

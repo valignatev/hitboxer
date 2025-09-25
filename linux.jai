@@ -1,6 +1,4 @@
 #load "./uinput.jai";
-#load "./libinput.jai";
-#load "./libudev.jai";
 
 CURRENT_PLATFORM :: Platform.LINUX;
 DEFAULT_WINDOW_CREATION_COLOR :: float.[.15,.15,.2];
@@ -952,6 +950,33 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
+    libinput_loaded := load_libinput(
+        libnames=.["libinput.so", "libinput.so.10", "libinput.so.10.13.0"],
+        symbols=...[
+            "libinput_event_get_type",
+            "libinput_get_fd",
+            "libinput_udev_create_context",
+            "libinput_udev_assign_seat",
+            "libinput_dispatch",
+            "libinput_get_event",
+            "libinput_event_get_type",
+            "libinput_event_destroy",
+            "libinput_event_get_device",
+            "libinput_device_get_sysname",
+            "libinput_event_get_pointer_event",
+            "libinput_event_get_keyboard_event",
+            "libinput_event_keyboard_get_key",
+            "libinput_event_keyboard_get_key_state",
+        ],
+    );
+    if !libinput_loaded {
+        return false, "Could not load libinput\n";
+    }
+
+    libudev_loaded := load_libudev(
+        libnames=.["libudev.so", "libudev.so.1", "libudev.so.1.7.10"],
+        symbols=...["udev_new"],
+    );
     // Virtual devices stuff
     {
         success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
@@ -1048,3 +1073,5 @@ using JDL :: #import "JDL";
 #import "Input";
 #import "Thread";
 #import "Helpers";
+#import "libinput"(LOAD_AT_RUNTIME=true, LOAD_LIBUDEV_AT_RUNTIME=true);
+#import "libudev"(LOAD_AT_RUNTIME=true);
