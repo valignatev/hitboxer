@@ -199,23 +199,23 @@ xcb_init_display :: (display: *Display) -> bool {
     {
         sync_ext := xcb_get_extension_data(d.handle, xcb_sync.id);
 
-        // print("%\n", formatStruct(sync_ext, 1, true));
         if (!sync_ext.present) {
-            log_error("SYNC is not present on this X11 server, install a better distro");
+            log_error("SYNC is not present on this X11 server");
             return false;
-        }
+        } else {
 
-        init_error: *xcb_generic_error_t;
-        init_cookie := xcb_sync.initialize(d.handle, 5, 0);
-        init_reply := xcb_sync.initialize_reply(d.handle, init_cookie, *init_error);
-        d.sync_info.present = true;
-        d.sync_info.major = init_reply.major_version;;
-        d.sync_info.minor = init_reply.minor_version;;
-        if init_reply.major_version < 3 {
-            log_error("X11 sync version is too small, supported %, got %\n", 3, d.sync_info.major);
+            init_error: *xcb_generic_error_t;
+            init_cookie := xcb_sync.initialize(d.handle, 5, 0);
+            init_reply := xcb_sync.initialize_reply(d.handle, init_cookie, *init_error);
+            d.sync_info.present = true;
+            d.sync_info.major = init_reply.major_version;;
+            d.sync_info.minor = init_reply.minor_version;;
+            if init_reply.major_version < 3 {
+                log_error("X11 sync version is too small, supported %, got %\n", 3, d.sync_info.major);
+            } else {
+                log("X11 sync: xcb-sync version %.%", d.sync_info.major, d.sync_info.minor);
+            }
         }
-
-        log("X11 sync: xcb-sync version %.%", d.sync_info.major, d.sync_info.minor);
     }
 
     display.xcb = d;
