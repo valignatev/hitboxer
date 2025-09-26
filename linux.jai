@@ -543,7 +543,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     active_mapping.*.source.code = ev.code;
                     table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
 
-                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL {
+                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL || active_mapping.mode == .OPPOSITE_NO_REPRESS {
                         table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
                         table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                     }
@@ -563,7 +563,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     active_mapping.*.destination.code = ev.code;
 
                     table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
-                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL {
+                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL || active_mapping.mode == .OPPOSITE_NO_REPRESS {
                         table_remove(*active_profile_in_ui.mappings, old_destination_code);
                         table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                     }
@@ -612,7 +612,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
             return;
         }
 
-        if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL {
+        if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL || bind.mode == .OPPOSITE_NO_REPRESS {
             opposing_code := bind.code;
 
             found, device_fd := table_find_new(*libinput_opened_devices, device_sysname);
@@ -647,7 +647,7 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     }
                 }
             } else if ev.value == 0 {
-                if test_key(opposing_code) {
+                if test_key(opposing_code) && bind.mode != .OPPOSITE_NO_REPRESS {
                     output_events[0] = input_event.{
                         time=.{},
                         type=EV_KEY,
