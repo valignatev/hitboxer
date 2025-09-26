@@ -82,7 +82,7 @@ xcb_init_display :: (display: *Display) -> bool {
 
     d := XCB_Display.{ base = display };
     d.base.type = XCB_Display;
-    d.base.create_window = xcb_create_window;
+    d.base.create_window = create_window;
     d.base.get_dimensions = xcb_get_dimensions;
     d.base.wait_for_events = xcb_wait_for_events;
     d.base.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
@@ -196,7 +196,7 @@ xcb_init_display :: (display: *Display) -> bool {
     }
 
     // xcb_sync
-    {
+    if xcb_sync.id {
         sync_ext := xcb_get_extension_data(d.handle, xcb_sync.id);
 
         if (!sync_ext.present) {
@@ -223,7 +223,7 @@ xcb_init_display :: (display: *Display) -> bool {
 }
 
 
-xcb_create_window :: (
+create_window :: (
     display: *Display,
     window_ret: *Window,
     width: s32,
