@@ -7,7 +7,7 @@ DEFAULT_MSAA: s32 : 4;
 uinput_fd: s32 = -1;
 test_uinput_fd: s32 = -1;
 virtual_device_sysname: string;
-grab_timer_fd: s32;
+grab_timer_fd: s32 = -1;
 grab_timer_test_passed := true;
 
 focused_programs_thread: Thread;
@@ -477,6 +477,9 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         state := libinput_event_keyboard_get_key_state(keyboard_event);
         // I want it to be at the very end so that this check does not delay
         // actual input handling. This is a super-tiny-micro-nano optimization.
+        if key == 0x70 {
+            write_original = false;
+        }
         defer if key == 0x70 {
             grab_timer_test_passed = true;
         }
@@ -524,7 +527,10 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
         if key == KEY_NUMLOCK return;
 
         using current_program_state;
-        if current_program_state.active_state == .SETTING_SOURCE || current_program_state.active_state == .SETTING_DESTINATION {
+        if ((current_program_state.active_state == .SETTING_SOURCE ||
+             current_program_state.active_state == .SETTING_DESTINATION) &&
+            key != 0x70
+        ) {
             next_state := Mapping_State.NOTHING;
             if ev.value == IS_DOWN && ev.type == EV_KEY {
                 if active_state == .SETTING_SOURCE {
@@ -543,7 +549,11 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     active_mapping.*.source.code = ev.code;
                     table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
 
-                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL || active_mapping.mode == .OPPOSITE_NO_REPRESS {
+                    if (
+                        active_mapping.mode == .OPPOSITE ||
+                        active_mapping.mode == .NEUTRAL ||
+                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                    ) {
                         table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
                         table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                     }
@@ -563,7 +573,11 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
                     active_mapping.*.destination.code = ev.code;
 
                     table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
-                    if active_mapping.mode == .OPPOSITE || active_mapping.mode == .NEUTRAL || active_mapping.mode == .OPPOSITE_NO_REPRESS {
+                    if (
+                        active_mapping.mode == .OPPOSITE ||
+                        active_mapping.mode == .NEUTRAL ||
+                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                    ) {
                         table_remove(*active_profile_in_ui.mappings, old_destination_code);
                         table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
                     }
@@ -678,6 +692,36 @@ handle_timers :: (thread: *Thread) -> s64 {
     // sends a special secret keyboard code to a separate virtual keyboard,
     // and then checks if this code got received and acknowledged. If we
     // don't see it happening, we just ungrab everything we grabbed previously.
+
+
+    grab_timer_fd = timerfd_create(xx clockid_t.CLOCK_MONOTONIC, 0);
+    if grab_timer_fd == -1 {
+        // TODO: errno
+        log_error("Could not create an ungrab timer. You might be in danger!\n");
+    } else {
+        timer_spec: itimerspec;
+        timer_spec.it_value = .{tv_sec=5};
+        timer_spec.it_interval = .{tv_sec=5};
+
+        result := timerfd_settime(
+            __ufd=grab_timer_fd,
+            __flags=0,
+            __utmr=*timer_spec,
+            __otmr=null,
+        );
+
+        if result == -1 {
+            // TODO: errno
+            log_error(S(
+                "Could not start an ungrab timer. ",
+                "You might be in danger of hardlocking yourself out of using ",
+                "your devices if Hitboxer gets stuck durin input handling!\n",
+            ));
+            close(grab_timer_fd);
+            grab_timer_fd = -1;
+            return -1;
+        }
+    }
     pfd: [1]pollfd;
     pfd[0].fd = grab_timer_fd;
     pfd[0].events = POLLIN;
@@ -950,6 +994,26 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
+    // Virtual devices stuff
+    {
+        success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
+        if !success {
+            return false, "Could not create a virtual keyboard, nothing will work\n";
+        }
+
+        // Test keyboard to check if we are cooked
+        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[0x70]);
+        if !success {
+            return false, "Could not create a virtual keyboard for health checking. It might be dangerous to run without it, so we abort!\n";
+        }
+    }
+
+    // Healthcheck timers stuff
+    timers_thread.starting_context.logger = my_logger;
+    thread_init(*timers_thread, handle_timers);
+    thread_start(*timers_thread);
+
+    // libudev and libinput loading
     libinput_loaded := load_libinput(
         libnames=.["libinput.so", "libinput.so.10", "libinput.so.10.13.0"],
         symbols=...[
@@ -977,46 +1041,6 @@ platform_init :: () -> success: bool, init_reason: string {
         libnames=.["libudev.so", "libudev.so.1", "libudev.so.1.7.10"],
         symbols=...["udev_new"],
     );
-    // Virtual devices stuff
-    {
-        success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
-        if !success {
-            return false, "Could not create a virtual keyboard, nothing will work\n";
-        }
-
-        // Test keyboard to check if we are cooked
-        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[0x70]);
-    }
-
-    // Timers stuff
-    {
-        grab_timer_fd = timerfd_create(xx clockid_t.CLOCK_MONOTONIC, 0);
-        if grab_timer_fd == -1 {
-            // TODO: errno
-            log_error("Could not create an ungrab timer. You might be in danger!\n");
-        } else {
-            timer_spec: itimerspec;
-            timer_spec.it_value = .{tv_sec=5};
-            timer_spec.it_interval = .{tv_sec=5};
-
-            result := timerfd_settime(
-                __ufd=grab_timer_fd,
-                __flags=0,
-                __utmr=*timer_spec,
-                __otmr=null,
-            );
-
-            if result == -1 {
-                // TODO: errno
-                log_error("Could not start an ungrab timer. You might be in danger!\n");
-            } else {
-                timers_thread.starting_context.logger = my_logger;
-                thread_init(*timers_thread, handle_timers);
-                thread_start(*timers_thread);
-            }
-        }
-    }
-
     // TODO: This should be in a separate thread, it affects startup times GREATLY!!!!
     // udev and libinput
     {

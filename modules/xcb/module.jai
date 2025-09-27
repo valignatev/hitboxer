@@ -1,3 +1,5 @@
+// TODO: provide an option to load at runtime like for libudev/libinput.
+//  Also, deduplicate bindings so that struct definitions are in one file that's loaded by separate proc files.
 #load "./xcb_fp.jai";
 #load "./xcb_xkb.jai";
 #load "./xcb_sync.jai";
