@@ -21,7 +21,7 @@ build :: () {
         if arg == {
             case "release";
             optimized = true;
-            set_optimization(*target_options, .VERY_OPTIMIZED, preserve_debug_info=false);
+            set_optimization(*target_options, .VERY_OPTIMIZED);
             // Why is MODULES_ONLY the default?
             target_options.dead_code_elimination = .ALL;
         }

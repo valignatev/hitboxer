@@ -32,7 +32,6 @@ scroll_value_mappings_region: float;
 scroll_value_new_profile: float;
 
 the_window: *Window;
-log_file: File;
 
 max_log_file_size := 1000_000;
 the_window_hidden := false;
@@ -75,6 +74,10 @@ Program_State :: struct {
     close_to_tray := false;
     runtime_debug := false;
     // need_to_scroll_mappings_region: bool;
+
+    log_file: File;
+    log_file_path: string = "log.txt";
+    config_file_path: string = "settings.socd";
 }
 dummy_input_text_state: Text_Input_State;
 
@@ -291,18 +294,24 @@ HEADER
 
 // When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
 // delete everything else from the beginning;
-file_partial_copy :: (data: *void, info: Log_Info) {
+rotate_log_file :: (data: *void, info: Log_Info) {
+    using current_program_state;
     error_info := info;
     error_info.common_flags |= .ERROR;
 
     #if OS == .LINUX {
         file_in := fileno(log_file.handle);
-        new_log_file, success := file_open("./log_new.txt", for_writing=true);
+        found, left, right := split_from_right(log_file_path, #char "/");
+        assert(found, "Something wrong with the log file path\n", log_file_path);
+        temp_log_file_path := join(left, "log_temp.txt", separator="/" ,, temp);
+        new_log_file, success := file_open(temp_log_file_path, for_writing=true);
 
         if !success {
             // MessageBox on windows?
             runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
             return;
+        } else {
+            print("ROTATING AHAHAHHAHAHAH: %\n", context.thread_index);
         }
 
         file_out := fileno(new_log_file.handle);
@@ -326,9 +335,9 @@ file_partial_copy :: (data: *void, info: Log_Info) {
         file_close(*log_file);
 
         // This doesn't do any error reporting lol
-        file_move("./log_new.txt", "./log.txt");
+        file_move(temp_log_file_path, log_file_path);
 
-        log_file, success = file_open("./log.txt", for_writing=true, keep_existing_content=true);
+        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
 
         if !success {
             runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
@@ -343,11 +352,7 @@ file_partial_copy :: (data: *void, info: Log_Info) {
 }
 
 my_logger :: (message: string, data: *void, info: Log_Info) {
-
-#if DEBUG {
-    runtime_support_default_logger(message, data, info);
-    return;
-}
+    using current_program_state;
 
     now := current_time_consensus();
     calendar_utc := to_calendar(now, .UTC);
@@ -363,7 +368,7 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
     if !success {
 
         // Just one attempt to reopen the log file again.
-        log_file, success = file_open("./log.txt", for_writing=true, keep_existing_content=true);
+        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
         if !success {
             runtime_support_default_logger("Couldn't write to the log file: file_open\n", data, info);
             return;
@@ -378,7 +383,7 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
     }
     if length {
         if length > max_log_file_size {
-            file_partial_copy(data, info);
+            rotate_log_file(data, info);
         }
 
         length=, success := file_length(log_file);
@@ -411,6 +416,7 @@ push_my_context :: () #expand {
 
 
 init_settings :: () -> should_parse: bool, config: string, filename: string {
+    using current_program_state;
 
     found, exe_path, exe_name := split_from_right(System.get_path_of_running_executable(), #char "/");
     if !found {
@@ -719,12 +725,6 @@ finalize_state :: () {
 
 main :: () {
     context.logger = my_logger;
-    log_file=, success := file_open("./log.txt", for_writing=true, keep_existing_content=true);
-
-    if !success {
-        log_error("Couldn't open the log file, your errors will not be logged\n");
-    }
-    defer file_close(*log_file);
 
     current_program_state = .{
         active_state=.NOTHING,
@@ -741,7 +741,7 @@ main :: () {
         exit(1);
     }
 
-    success = JDL_init();
+    success := JDL_init();
     if !success {
         log_error("Couldn't initialize SDL at Home\n");
         return;
