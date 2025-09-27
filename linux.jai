@@ -994,57 +994,6 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
-    using current_program_state;
-    {
-        log_path: Path;
-        log_path.words.allocator = temp;
-        user_home := getenv("HOME".data);
-        if (!user_home) {
-            log_error("Could not determine your home directory path, can't initialize logging!\n");
-        } else {
-            array_add(*log_path.words, to_string(user_home));
-            raw := getenv("XDG_STATE_HOME".data);
-            if raw {
-                array_add(*log_path.words, to_string(raw));
-            } else {
-                array_add(*log_path.words, ".local/state");
-            }
-
-            array_add(*log_path.words, "hitboxer");
-            log_dir := path_to_string(log_path,, temp);
-
-            array_add(*log_path.words, "log.txt");
-            log_file_path = path_to_string(log_path);
-
-            fully_exists, how_much := how_much_of_path_exists_on_the_local_filesystem(log_path,, temp);
-            log_dir_initted := false;
-            if !fully_exists {
-                // XDG_STATE_HOME exists but hitboxer directory does not
-                if how_much == 2 {
-                    success := make_directory_if_it_does_not_exist(log_dir);
-                    if success {
-                        log_dir_initted = true;
-                    } else {
-                        log_error("Could not create directory to store the log file. Attempted to mkdir %\n", log_dir);
-                    }
-                } else if how_much == 3 {
-                    // 3 is when hitboxer directory does exist, but log file itself does not, which is fine.
-                    // Anything else is not expected.
-                    log_dir_initted = true;
-                } else {
-                    log_error("Could not create a log file, because $XDG_STATE_HOME (or ~/.local/state) does not exist\n");
-                }
-            } else {
-                log_dir_initted = true;
-            }
-
-            log_file=, success := file_open(log_file_path, for_writing=true, keep_existing_content=true);
-
-            if !success {
-                log_error("Couldn't open the log file, your errors will not be logged\n");
-            }
-        }
-    }
     // Virtual devices stuff
     {
         success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
@@ -1113,6 +1062,93 @@ platform_init :: () -> success: bool, init_reason: string {
     }
 
     return true, "";
+}
+
+
+platform_set_logging_and_config_file_paths :: () {
+    using current_program_state;
+    user_home := to_string(getenv("HOME".data));
+    if (!user_home) {
+        log_error("Could not determine your home directory path, can't initialize logging and read config!\n");
+    } else {
+        // Logger setup
+        log_path: Path;
+        log_path.words.allocator = temp;
+        array_add(*log_path.words, user_home);
+        xdg_state_home := getenv("XDG_STATE_HOME".data);
+        if xdg_state_home {
+            array_add(*log_path.words, to_string(xdg_state_home));
+        } else {
+            array_add(*log_path.words, ".local/state");
+        }
+
+        array_add(*log_path.words, "hitboxer");
+        log_dir := path_to_string(log_path,, temp);
+
+        array_add(*log_path.words, "log.txt");
+        log_file_path = path_to_string(log_path);
+
+        fully_exists, how_much := how_much_of_path_exists_on_the_local_filesystem(log_path,, temp);
+        log_dir_initted := false;
+        if !fully_exists {
+            // XDG_STATE_HOME exists but hitboxer directory does not
+            if how_much == 2 {
+                success := make_directory_if_it_does_not_exist(log_dir);
+                if success {
+                    log_dir_initted = true;
+                } else {
+                    log_error("Could not create directory to store the log file. Attempted to mkdir %\n", log_dir);
+                }
+            } else if how_much == 3 {
+                // 3 is when hitboxer directory does exist, but log file itself does not, which is fine.
+                // Anything else is not expected.
+                log_dir_initted = true;
+            } else {
+                log_error("Could not create a log file, because $XDG_STATE_HOME (or ~/.local/state) does not exist\n");
+            }
+        } else {
+            log_dir_initted = true;
+        }
+
+        // Config setup
+        config_path: Path;
+        config_path.words.allocator = temp;
+        array_add(*config_path.words, user_home);
+        xdg_config_home := getenv("XDG_CONFIG_HOME".data);
+        if xdg_state_home {
+            array_add(*config_path.words, to_string(xdg_config_home));
+        } else {
+            array_add(*config_path.words, ".config");
+        }
+
+        array_add(*config_path.words, "hitboxer");
+        config_dir := path_to_string(config_path,, temp);
+
+        array_add(*config_path.words, "settings.socd");
+        config_file_path = path_to_string(config_path);
+
+        fully_exists, how_much = how_much_of_path_exists_on_the_local_filesystem(config_path,, temp);
+        config_dir_initted := false;
+        if !fully_exists {
+            // XDG_CONFIG_HOME exists but hitboxer directory does not
+            if how_much == 2 {
+                success := make_directory_if_it_does_not_exist(config_dir);
+                if success {
+                    config_dir_initted = true;
+                } else {
+                    log_error("Could not create directory to store the config file. Attempted to mkdir %\n", config_dir);
+                }
+            } else if how_much == 3 {
+                // 3 is when hitboxer directory does exist, but config file itself does not, which is fine.
+                // Anything else is not expected.
+                config_dir_initted = true;
+            } else {
+                log_error("Could not create a config file, because $XDG_CONFIG_HOME (or ~/.config) does not exist\n");
+            }
+        } else {
+            config_dir_initted = true;
+        }
+    }
 }
 
 platform_after_window_created :: (window: Window_Type) -> bool {

@@ -75,6 +75,7 @@ Program_State :: struct {
     runtime_debug := false;
     // need_to_scroll_mappings_region: bool;
 
+    logging_initted := false;
     log_file: File;
     log_file_path: string = "log.txt";
     config_file_path: string = "settings.socd";
@@ -287,6 +288,18 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
+init_logging :: () {
+    using current_program_state;
+    log_file=, success := file_open(log_file_path, for_writing=true, keep_existing_content=true);
+
+    if !success {
+        log_error("Couldn't open the log file, your errors will not be logged\n");
+    } else {
+        logging_initted = true;
+    }
+}
+
+
 // TODO: THREAD SAFETY - now, at least on linux, this shit will get called from 3 different
 // threads and it will spectacularly collapse! The solution is to log everything into an array that
 // a separate thread for logging will consume and call this logger, which doesn't have to be
@@ -310,8 +323,6 @@ rotate_log_file :: (data: *void, info: Log_Info) {
             // MessageBox on windows?
             runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
             return;
-        } else {
-            print("ROTATING AHAHAHHAHAHAH: %\n", context.thread_index);
         }
 
         file_out := fileno(new_log_file.handle);
@@ -362,6 +373,12 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
         formatted_message = tprint("%: %\n", date_s, message);
     } else {
         formatted_message = tprint("%: %", date_s, message);
+    }
+
+    // TODO: file_lenght (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
+    if !logging_initted {
+        runtime_support_default_logger(formatted_message, data, info);
+        return;
     }
 
     length, success := file_length(log_file);
@@ -418,26 +435,27 @@ push_my_context :: () #expand {
 init_settings :: () -> should_parse: bool, config: string, filename: string {
     using current_program_state;
 
-    found, exe_path, exe_name := split_from_right(System.get_path_of_running_executable(), #char "/");
-    if !found {
-        log_error("Error: unable to find path to the executable to find the config file next to it. Your settings won't be saved!\n");
-        return false, "", "";
-    }
+    // TODO: move this to windows.jai for Windows-specific logic
+    // found, exe_path, exe_name := split_from_right(System.get_path_of_running_executable(), #char "/");
+    // if !found {
+    //     log_error("Error: unable to find path to the executable to find the config file next to it. Your settings won't be saved!\n");
+    //     return false, "", "";
+    // }
 
-    settings_filename := tprint("%/%", exe_path, "settings.socd");
+    // settings_filename := tprint("%/%", exe_path, "settings.socd");
 
-    raw_settings, success := read_entire_file(settings_filename);
+    raw_settings, success := read_entire_file(config_file_path);
     if !success {
         log("Coulnd't find settings.socd file, trying to create a new one\n");
-        written : = write_entire_file(settings_filename, tprint(CONFIG_HEADER, SETTINGS_VERSION));
+        written : = write_entire_file(config_file_path, tprint(CONFIG_HEADER, SETTINGS_VERSION));
         if !written {
             // TODO: Error detection
             log_error("Couldn't create the settings.socd, your settings won't be saved!");
         }
-        return false, "", settings_filename;
+        return false, "", config_file_path;
     }
 
-    return true, raw_settings, settings_filename;
+    return true, raw_settings, config_file_path;
 }
 
 // TODO: Actually write a test for this lol
@@ -675,8 +693,6 @@ serialize_settings :: () -> succes: bool {
         return success;
     }
 
-    settings_filename := tprint("%/%", exe_path, "settings.socd");
-
     b: String_Builder;
     print_to_builder(*b, CONFIG_HEADER, SETTINGS_VERSION);
 
@@ -701,7 +717,7 @@ serialize_settings :: () -> succes: bool {
     }
 
     result := builder_to_string(*b);
-    if allowed_to_write success = write_entire_file(settings_filename, result);
+    if allowed_to_write success = write_entire_file(config_file_path, result);
     if !success {
         log_error("Error: Could not store the settings to disk, your settings changes will not be saved!\n");
     }
@@ -734,6 +750,9 @@ main :: () {
         need_to_rerender=true,
     };
     using current_program_state;
+
+    platform_set_logging_and_config_file_paths();
+    init_logging();
 
     success_init, init_reason := platform_init();
     if !success_init {
