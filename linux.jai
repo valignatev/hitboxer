@@ -9,6 +9,7 @@ test_uinput_fd: s32 = -1;
 virtual_device_sysname: string;
 grab_timer_fd: s32 = -1;
 grab_timer_test_passed := true;
+HEALTHCHECK_KEY :: 0x70;
 
 focused_programs_thread: Thread;
 event_handling_thread: Thread;
@@ -18,8 +19,6 @@ timers_thread: Thread;
 // Might want to allocate it at runtime instead
 MAX_PATH_LENGTH :: 4096;
 XKB_EVDEV_OFFSET : u32 : 8;
-
-KB_HOOK_SET := false;
 
 // major and minor are straight from Linux kernel
 major :: inline (dev: u64) -> u64 {
@@ -192,7 +191,7 @@ detect_focused_program :: (thread: *Thread) -> error_code: s64 {
                 for profile: profiles {
                     if contains(profile.program, name) {
                         active_profile = *profile;
-                        set_kb_hook();
+                        set_mapping_resolving_hook();
                         hook_is_set_by_profile = true;
                         break;
                     }
@@ -203,14 +202,14 @@ detect_focused_program :: (thread: *Thread) -> error_code: s64 {
                     global_profile := profiles[0];
                     if global_profile.mappings_array.count > 0 {
                         active_profile = *global_profile;
-                        set_kb_hook();
+                        set_mapping_resolving_hook();
                         continue;
                     }
                 } else {
                     continue;
                 }
 
-                unset_kb_hook();
+                unset_mapping_resolving_hook();
             }
         }
     }
@@ -306,16 +305,6 @@ get_list_of_programs :: () -> []string {
     return result;
 }
 
-set_kb_hook :: () {
-    KB_HOOK_SET = true;
-    return;
-}
-
-unset_kb_hook :: () {
-    KB_HOOK_SET = false;
-    return;
-}
-
 Device :: struct {
     event_file: string;
     name: string;
@@ -362,7 +351,7 @@ free_candidates :: (candidates: *[..]Device) {
     pthread_create(*tid, null, close_descriptors, *opened_file_descriptors_for_candidates);
 }
 
-read_entire_proc_info :: () -> [..]u8 {
+read_entire_proc_input_devices :: () -> [..]u8 {
     data: [..] u8;
     buff: [4096] u8;
     fd := open("/proc/bus/input/devices", O_RDONLY);
@@ -387,7 +376,7 @@ read_entire_proc_info :: () -> [..]u8 {
 }
 
 is_our_virtual_keyboard :: (path: string) -> bool {
-    devices_raw := read_entire_proc_info();
+    devices_raw := read_entire_proc_input_devices();
     defer array_free(devices_raw);
     devices_str : string = xx devices_raw;
 
@@ -400,6 +389,36 @@ is_our_virtual_keyboard :: (path: string) -> bool {
         device_props := split(it, "\n");
         for prop: device_props {
             if prop == "N: Name=\"Hitboxer keyboard\"" {
+                get_handlers = true;
+            }
+            if get_handlers && begins_with(prop, "H: Handlers=") {
+                handlers := split(slice(prop, 12, prop.count), " ");
+                // TODO: dynamic allocation
+                defer array_free(handlers);
+
+                result := array_find(handlers, target_event);
+                return result;
+            }
+        }
+    }
+    return false;
+}
+
+// TODO: copypasta
+is_our_virtual_test_keyboard :: (path: string) -> bool {
+    devices_raw := read_entire_proc_input_devices();
+    defer array_free(devices_raw);
+    devices_str : string = xx devices_raw;
+
+    // This should never fail
+    _, _, target_event := split_from_right(path, "/");
+
+    devices := split(devices_str, "\n\n");
+    get_handlers := false;
+    for devices {
+        device_props := split(it, "\n");
+        for prop: device_props {
+            if prop == "N: Name=\"Hitboxer healthcheck device\"" {
                 get_handlers = true;
             }
             if get_handlers && begins_with(prop, "H: Handlers=") {
@@ -488,10 +507,38 @@ start_input_handling :: (thread: *Thread) -> s64 {
         }
 
         libinput_dispatch(libinput);
+        // TODO: make healthcheck nicer without having to copypaste it all over the place.
         while event := libinput_get_event(libinput) {
 
             event_type := libinput_event_get_type(event);
-            handle_libinput_event(event, uinput_fd);
+
+            // Maybe there are devices that are mouse and keyboard at the same time,
+            // and doing this will eat mouse movements or some shit. I dont' think this is
+            // how Linux works - usually, if device has multiple capabilities, it will just
+            // register multiple /dev/input/evenX logical devices. For example, my Keychron Q11
+            // keyboard registers a separate mouse and keyboard event files. Same as my Razer mouse.
+            // But if there _IS_ physical devices that do not do this, a user of such device will get fucked
+            // by this logic.
+            if event_type != .LIBINPUT_EVENT_KEYBOARD_KEY {
+                continue;
+            }
+
+            keyboard_event := libinput_event_get_keyboard_event(event);
+            key := libinput_event_keyboard_get_key(keyboard_event);
+            state := libinput_event_keyboard_get_key_state(keyboard_event);
+            defer if key == HEALTHCHECK_KEY {
+                grab_timer_test_passed = true;
+            }
+
+            if mapping_resolving_hook_is_installed {
+                handle_libinput_event(event, key, state, uinput_fd);
+            } else if mapping_setting_hook_is_installed {
+                handle_libinput_event_to_set_mapping(event, key, state, uinput_fd);
+            } else if event_type == .LIBINPUT_EVENT_DEVICE_REMOVED {
+                handle_libinput_device_removed(event, uinput_fd);
+            } else {
+                simply_forward_libinput_keyboard_event(event, key, state, uinput_fd);
+            }
             libinput_event_destroy(event);
         }
     }
@@ -499,7 +546,136 @@ start_input_handling :: (thread: *Thread) -> s64 {
     return 0;
 }
 
-handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
+simply_forward_libinput_keyboard_event :: (event: *libinput_event, key: u32, state: libinput_key_state, uinput_fd: s32) {
+    write_original := key != HEALTHCHECK_KEY;
+
+    output_events: [2]input_event;
+    output_events[0] = input_event.{
+        time=.{},
+        type=EV_KEY,
+        code=cast(u16)key,
+        value=xx state,
+    };
+    output_events[1] = input_event.{
+        time=.{},
+        type=EV_SYN,
+        code=SYN_REPORT,
+        value=0,
+    };
+
+    if write_original {
+        print("Simply passing on %!\n", key);
+        written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
+        if written < 0 {
+            log_error("Could not pass the event on\n");
+            grab_timer_test_passed = false;
+        } else {
+            // If we successfully wrote to an input fd, consider that we are alive unconditionally.
+            // TODO: Is there a way to test that our virtual device is not grabbed?
+            grab_timer_test_passed = true;
+        }
+    }
+}
+
+
+handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state: libinput_key_state, uinput_fd: s32) {
+    using current_program_state;
+
+    // Reconstruct input_event from libinput_event.
+    input_events: [2]input_event;
+    input_events[0] = input_event.{
+        time=.{},
+        type=EV_KEY,
+        code=cast(u16)key,
+        value=xx state,
+    };
+    input_events[1] = input_event.{
+        time=.{},
+        type=EV_SYN,
+        code=SYN_REPORT,
+        value=0,
+    };
+    ev := input_events[0];
+
+    if ((current_program_state.active_state == .SETTING_SOURCE ||
+         current_program_state.active_state == .SETTING_DESTINATION) &&
+        key != HEALTHCHECK_KEY
+       ) {
+        next_state := Mapping_State.NOTHING;
+        if ev.value == IS_DOWN && ev.type == EV_KEY {
+            if active_state == .SETTING_SOURCE {
+                print("mappings before:\n");
+                for active_profile_in_ui.mappings {
+                    dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
+                    print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
+                }
+
+                old_source_code := active_mapping.source.code;
+                if old_source_code == KEY_RESERVED next_state = .SETTING_DESTINATION;
+
+                found, old_binding_from_old_source := table_find_new(*active_profile_in_ui.mappings, old_source_code);
+                print("Old source is %\n", old_binding_from_old_source);
+
+                active_mapping.*.source.code = ev.code;
+                table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
+
+                if (
+                    active_mapping.mode == .OPPOSITE ||
+                        active_mapping.mode == .NEUTRAL ||
+                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                ) {
+                    table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
+                    table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
+                }
+                // I don't think it matters whether we found it.
+                table_remove(*active_profile_in_ui.mappings, old_source_code);
+
+                print("mappings after:\n");
+                for active_profile_in_ui.mappings {
+                    dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
+                    print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
+                }
+
+                log("Set source %\n", ev.code);
+            } else if active_state == .SETTING_DESTINATION {
+                next_state = .NOTHING;
+                old_destination_code := active_mapping.destination.code;
+                active_mapping.*.destination.code = ev.code;
+
+                table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
+                if (
+                    active_mapping.mode == .OPPOSITE ||
+                        active_mapping.mode == .NEUTRAL ||
+                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                ) {
+                    table_remove(*active_profile_in_ui.mappings, old_destination_code);
+                    table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
+                }
+                log("Set destination %\n", ev.code);
+            }
+
+            if next_state == .NOTHING {
+                finalize_state();
+            } else {
+                active_state = next_state;
+            }
+        }
+        return;
+    }
+
+}
+
+handle_libinput_device_removed :: (event: *libinput_event, uinput_fd: s32) {
+    device := libinput_event_get_device(event);
+    device_sysname := to_string(libinput_device_get_sysname(device));
+    if device_sysname == virtual_device_sysname {
+        uinput_device_created = false;
+        log("hitboxer virtual device was removed\n");
+        // TODO: ungrab everything here and maybe shutdown idk.
+    }
+}
+
+handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_state, uinput_fd: s32) {
     // NOTE: It doesn't look like libinput passes us SYN events from the queue, so we have to
     // recreate it manually. it doesn't pass those HID events either. I wonder if it's fine to
     // just ignore them anyway?
@@ -514,223 +690,119 @@ handle_libinput_event :: (event: *libinput_event, uinput_fd: s32) {
     device := libinput_event_get_device(event);
     device_sysname := to_string(libinput_device_get_sysname(device));
 
-    if event_type == .LIBINPUT_EVENT_POINTER_BUTTON {
-        pointer_event := libinput_event_get_pointer_event(event);
+    write_original = key != HEALTHCHECK_KEY;
+
+    // Reconstruct input_event from libinput_event.
+    input_events[0] = input_event.{
+        time=.{},
+        type=EV_KEY,
+        code=cast(u16)key,
+        value=xx state,
+    };
+    input_events[1] = input_event.{
+        time=.{},
+        type=EV_SYN,
+        code=SYN_REPORT,
+        value=0,
+    };
+    ev := input_events[0];
+    if state == .LIBINPUT_KEY_STATE_PRESSED {
+        print("% pressed (%)\n", get_key_name(key), key);
     }
-    else if event_type == .LIBINPUT_EVENT_DEVICE_REMOVED {
-        if device_sysname == virtual_device_sysname {
-            uinput_device_created = false;
-            log("hitboxer virtual device was removed\n");
-            // TODO: ungrab everything here and maybe shutdown idk.
-        }
-    }
-    else if event_type == .LIBINPUT_EVENT_KEYBOARD_KEY {
-        keyboard_event := libinput_event_get_keyboard_event(event);
-        key := libinput_event_keyboard_get_key(keyboard_event);
-        state := libinput_event_keyboard_get_key_state(keyboard_event);
-        // I want it to be at the very end so that this check does not delay
-        // actual input handling. This is a super-tiny-micro-nano optimization.
-        if key == 0x70 {
-            write_original = false;
-        }
-        defer if key == 0x70 {
+
+    // Pass the real event into our virtual device.
+    defer if write_original {
+
+        written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
+        if written < 0 {
+            log_error("Could not pass the event on\n");
+        } else {
+            // If we successfully wrote to an input fd, consider that we are alive unconditionally.
+            // TODO: Is there a way to test that our virtual device is not grabbed?
             grab_timer_test_passed = true;
         }
+    }
 
-        // Reconstruct input_event from libinput_event.
-        input_events[0] = input_event.{
-            time=.{},
+    // NOTE: We're counting on the correct mode being set on the destination keybind
+    // in the hash table. At least for now
+    bind := get_key_mapping(ev.code);
+    if bind == dummy_bind {
+        return;
+    }
+
+    if bind.mode == .REMAP {
+        write_original = false;
+        bind_name := get_key_name(bind.code);
+        log("Found mapping: %\n", bind_name);
+        output_events[0] = input_event.{
             type=EV_KEY,
-            code=cast(u16)key,
-            value=xx state,
+            code=cast(u16)bind.code,
+            value=ev.value,
         };
-        input_events[1] = input_event.{
-            time=.{},
+        output_events[1] = input_event.{
             type=EV_SYN,
             code=SYN_REPORT,
             value=0,
         };
-        ev := input_events[0];
-        if state == .LIBINPUT_KEY_STATE_PRESSED {
-            print("% pressed (%)\n", get_key_name(key), key);
+
+        written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
+        if written < 0 {
+            log_error("Could not write one to one mapping for %\n", bind_name);
         }
+        return;
+    }
 
-        // Pass the real event into our virtual device.
-        defer if write_original {
+    if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL || bind.mode == .OPPOSITE_NO_REPRESS {
+        opposing_code := bind.code;
 
-            written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
-            if written < 0 {
-                log_error("Could not pass the event on\n");
-            } else {
-                // If we successfully wrote to an input fd, consider that we are alive unconditionally.
-                // TODO: Is there a way to test that our virtual device is not grabbed?
-                grab_timer_test_passed = true;
-            }
-
-            // TODO: This should not be in an input handler. This shoudl be in some other place that
-            //  is maybe on another thread (like, logger), that logs pressed keys in debug mode.
-            // We're updating xkb state here for handling Numlock correctly, but we don't
-            // even take advantage of that, because numpad keys are specialcased in get_key_name anyway
-            // So maybe we don't even need to update the state at all. At least until we have a proper
-            // keyboard layouts/localization support.
-            xkb_keycode: xkb_keycode_t = XKB_EVDEV_OFFSET + key;
-            xkb_state_update_key(JDL.main_display.base.xkb_state.kb_state, xkb_keycode, xx state);
+        found, device_fd := table_find_new(*libinput_opened_devices, device_sysname);
+        if !found {
+            log_error("Can't get an open file descriptor for %\n", device_sysname);
+            return;
         }
-
-        if key == KEY_NUMLOCK return;
-
-        using current_program_state;
-        if ((current_program_state.active_state == .SETTING_SOURCE ||
-             current_program_state.active_state == .SETTING_DESTINATION) &&
-            key != 0x70
-        ) {
-            next_state := Mapping_State.NOTHING;
-            if ev.value == IS_DOWN && ev.type == EV_KEY {
-                if active_state == .SETTING_SOURCE {
-                    print("mappings before:\n");
-                    for active_profile_in_ui.mappings {
-                        dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                        print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
-                    }
-
-                    old_source_code := active_mapping.source.code;
-                    if old_source_code == KEY_RESERVED next_state = .SETTING_DESTINATION;
-
-                    found, old_binding_from_old_source := table_find_new(*active_profile_in_ui.mappings, old_source_code);
-                    print("Old source is %\n", old_binding_from_old_source);
-
-                    active_mapping.*.source.code = ev.code;
-                    table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
-
-                    if (
-                        active_mapping.mode == .OPPOSITE ||
-                        active_mapping.mode == .NEUTRAL ||
-                        active_mapping.mode == .OPPOSITE_NO_REPRESS
-                    ) {
-                        table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
-                        table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
-                    }
-                    // I don't think it matters whether we found it.
-                    table_remove(*active_profile_in_ui.mappings, old_source_code);
-
-                    print("mappings after:\n");
-                    for active_profile_in_ui.mappings {
-                        dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                        print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
-                    }
-
-                    log("Set source %\n", ev.code);
-                } else if active_state == .SETTING_DESTINATION {
-                    next_state = .NOTHING;
-                    old_destination_code := active_mapping.destination.code;
-                    active_mapping.*.destination.code = ev.code;
-
-                    table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
-                    if (
-                        active_mapping.mode == .OPPOSITE ||
-                        active_mapping.mode == .NEUTRAL ||
-                        active_mapping.mode == .OPPOSITE_NO_REPRESS
-                    ) {
-                        table_remove(*active_profile_in_ui.mappings, old_destination_code);
-                        table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
-                    }
-                    log("Set destination %\n", ev.code);
+        key_bit_result := ioctl(device_fd, EVIOCGKEY(key_bits.count), *key_bits);
+        if key_bit_result < key_bits_num {
+            log_error("Can't read the device key state\n");
+            return;
+        }
+        if ev.value == 1 {
+            if test_key(opposing_code) {
+                if bind.mode == .NEUTRAL {
+                    write_original = false;
                 }
+                output_events[0] = input_event.{
+                    type=EV_KEY,
+                    code=cast(u16)opposing_code,
+                    value=IS_UP,
+                };
+                output_events[1] = input_event.{
+                    type=EV_SYN,
+                    code=SYN_REPORT,
+                    value=0,
+                };
 
-                if next_state == .NOTHING {
-                    finalize_state();
-                } else {
-                    active_state = next_state;
+                written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
+                if written < 0 {
+                    log_error("Could not release the key\n");
                 }
             }
-            return;
-        }
-
-        if !KB_HOOK_SET {
-            return;
-        }
-
-        // NOTE: We're counting on the correct mode being set on the destination keybind
-        // in the hash table. At least for now
-        bind := get_key_mapping(ev.code);
-        if bind == dummy_bind {
-            return;
-        }
-
-        if bind.mode == .REMAP {
-            write_original = false;
-            bind_name := get_key_name(bind.code);
-            log("Found mapping: %\n", bind_name);
-            output_events[0] = input_event.{
-                type=EV_KEY,
-                code=cast(u16)bind.code,
-                value=ev.value,
-            };
-            output_events[1] = input_event.{
-                type=EV_SYN,
-                code=SYN_REPORT,
-                value=0,
-            };
-
-            written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
-            if written < 0 {
-                log_error("Could not write one to one mapping for %\n", bind_name);
-            }
-            return;
-        }
-
-        if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL || bind.mode == .OPPOSITE_NO_REPRESS {
-            opposing_code := bind.code;
-
-            found, device_fd := table_find_new(*libinput_opened_devices, device_sysname);
-            if !found {
-                log_error("Can't get an open file descriptor for %\n", device_sysname);
-                return;
-            }
-            key_bit_result := ioctl(device_fd, EVIOCGKEY(key_bits.count), *key_bits);
-            if key_bit_result < key_bits_num {
-                log_error("Can't read the device key state\n");
-                return;
-            }
-            if ev.value == 1 {
-                if test_key(opposing_code) {
-                    if bind.mode == .NEUTRAL {
-                        write_original = false;
-                    }
-                    output_events[0] = input_event.{
-                        type=EV_KEY,
-                        code=cast(u16)opposing_code,
-                        value=IS_UP,
-                    };
-                    output_events[1] = input_event.{
-                        type=EV_SYN,
-                        code=SYN_REPORT,
-                        value=0,
-                    };
-
-                    written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
-                    if written < 0 {
-                        log_error("Could not release the key\n");
-                    }
-                }
-            } else if ev.value == 0 {
-                if test_key(opposing_code) && bind.mode != .OPPOSITE_NO_REPRESS {
-                    output_events[0] = input_event.{
-                        time=.{},
-                        type=EV_KEY,
-                        code=cast(u16)opposing_code,
-                        value=IS_DOWN,
-                    };
-                    output_events[1] = input_event.{
-                        time=.{},
-                        type=EV_SYN,
-                        code=SYN_REPORT,
-                        value=0,
-                    };
-                    written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
-                    if written < 0 {
-                        log_error("Could not repress the key\n");
-                    }
+        } else if ev.value == 0 {
+            if test_key(opposing_code) && bind.mode != .OPPOSITE_NO_REPRESS {
+                output_events[0] = input_event.{
+                    time=.{},
+                    type=EV_KEY,
+                    code=cast(u16)opposing_code,
+                    value=IS_DOWN,
+                };
+                output_events[1] = input_event.{
+                    time=.{},
+                    type=EV_SYN,
+                    code=SYN_REPORT,
+                    value=0,
+                };
+                written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
+                if written < 0 {
+                    log_error("Could not repress the key\n");
                 }
             }
         }
@@ -783,7 +855,7 @@ handle_timers :: (thread: *Thread) -> s64 {
     control_events[0] = input_event.{
         time=.{},
         type=EV_KEY,
-        code=cast(u16)0x70,
+        code=cast(u16)HEALTHCHECK_KEY,
         value=xx 1,
     };
     control_events[1] = input_event.{
@@ -795,7 +867,7 @@ handle_timers :: (thread: *Thread) -> s64 {
     control_events[2] = input_event.{
         time=.{},
         type=EV_KEY,
-        code=cast(u16)0x70,
+        code=cast(u16)HEALTHCHECK_KEY,
         value=xx 0,
     };
     control_events[3] = input_event.{
@@ -848,14 +920,24 @@ start_detecting_focused_program :: () {
 }
 
 unset_mapping_setting_hook :: () {
-    // @TODO: Implement
-    return;
+    mapping_setting_hook_is_installed = false;
 }
 
 
 set_key_mapping_hook :: (window: Window_Type) {
-    // It does nothing for now, because logging loop handles that.
-    return;
+    using current_program_state;
+
+    mapping_setting_hook_is_installed = true;
+    log("Listening for new mapping: %\n", active_state);
+}
+
+set_mapping_resolving_hook :: () {
+    mapping_resolving_hook_is_installed  = true;
+}
+
+unset_mapping_resolving_hook :: () {
+    mapping_resolving_hook_is_installed  = false;
+    reset_temporary_storage();
 }
 
 get_key_name :: (key_scan_code: u32) -> string {
@@ -1020,8 +1102,14 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
     }
 
     if is_keyboard(fd, path) && uinput_fd > 0 {
-        table_add(*libinput_opened_devices, sysname, fd);
-        log("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
+        // Not tracking healthcheck virtual keyboard so I never ungrab it when unsetting hooks.
+        // Because I track its file descriptor separately and I never want it to escape the containment.
+        if !is_our_virtual_test_keyboard(path) {
+            table_add(*libinput_opened_devices, sysname, fd);
+        }
+
+        // log("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
+        print("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
         grab_result := ioctl(fd, EVIOCGRAB, 1);
         if grab_result < 0 {
             log_error("Could not grab % for controlling its inputs\n", path);
@@ -1049,7 +1137,7 @@ platform_init :: () -> success: bool, init_reason: string {
         }
 
         // Test keyboard to check if we are cooked
-        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[0x70]);
+        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[HEALTHCHECK_KEY]);
         if !success {
             return false, "Could not create a virtual keyboard for health checking. It might be dangerous to run without it, so we abort!\n";
         }
