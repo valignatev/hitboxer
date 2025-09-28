@@ -526,6 +526,13 @@ start_input_handling :: (thread: *Thread) -> s64 {
             keyboard_event := libinput_event_get_keyboard_event(event);
             key := libinput_event_keyboard_get_key(keyboard_event);
             state := libinput_event_keyboard_get_key_state(keyboard_event);
+
+#if DEBUG {
+            if state == .LIBINPUT_KEY_STATE_PRESSED {
+                print("% pressed (%)\n", get_key_name(key), key);
+            }
+}
+
             defer if key == HEALTHCHECK_KEY {
                 grab_timer_test_passed = true;
             }
@@ -564,7 +571,6 @@ simply_forward_libinput_keyboard_event :: (event: *libinput_event, key: u32, sta
     };
 
     if write_original {
-        print("Simply passing on %!\n", key);
         written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
         if written < 0 {
             log_error("Could not pass the event on\n");
@@ -706,9 +712,6 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
         value=0,
     };
     ev := input_events[0];
-    if state == .LIBINPUT_KEY_STATE_PRESSED {
-        print("% pressed (%)\n", get_key_name(key), key);
-    }
 
     // Pass the real event into our virtual device.
     defer if write_original {
