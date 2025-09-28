@@ -89,11 +89,6 @@ get_key_name :: (key_scan_code: u32) -> string {
 }
 
 
-start_logging_keys :: () {
-    //
-}
-
-
 // This is just to not spam runtime debug logs.
 // TODO: probably store this is a part of the status on the key itself (see Key experiment in main.jai)
 _repeat_counter := 0;

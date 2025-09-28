@@ -415,7 +415,60 @@ is_our_virtual_keyboard :: (path: string) -> bool {
     return false;
 }
 
-start_logging_keys_in_a_thread :: (thread: *Thread) -> s64 {
+start_input_handling :: (thread: *Thread) -> s64 {
+
+    // libudev and libinput loading
+    libinput_loaded := load_libinput(
+        libnames=.["libinput.so", "libinput.so.10", "libinput.so.10.13.0"],
+        symbols=...[
+            "libinput_event_get_type",
+            "libinput_get_fd",
+            "libinput_udev_create_context",
+            "libinput_udev_assign_seat",
+            "libinput_dispatch",
+            "libinput_get_event",
+            "libinput_event_get_type",
+            "libinput_event_destroy",
+            "libinput_event_get_device",
+            "libinput_device_get_sysname",
+            "libinput_event_get_pointer_event",
+            "libinput_event_get_keyboard_event",
+            "libinput_event_keyboard_get_key",
+            "libinput_event_keyboard_get_key_state",
+        ],
+    );
+    if !libinput_loaded {
+        log_error("Could not load libinput\n");
+        return -1;
+    }
+
+    libudev_loaded := load_libudev(
+        libnames=.["libudev.so", "libudev.so.1", "libudev.so.1.7.10"],
+        symbols=...["udev_new"],
+    );
+
+    // udev and libinput
+    {
+        udev = udev_new();
+        if !udev_context {
+            log_error("Couldn't initialize udev context\n");
+            return -1;
+        }
+
+        libinput = libinput_udev_create_context(*interface_, null, udev);
+        if !libinput {
+            log_error("Couldn't initialize libinput context\n");
+            return -1;
+        }
+
+        // NOTE: Is there any issue with hardcoding a single seat here?
+        // Are setups where input devices are spread across multiple seats even exit?
+        if libinput_udev_assign_seat(libinput, "seat0") == -1 {
+            log_error("Libinput couldn't assign seat\n");
+            return -1;
+        }
+    }
+
     fd := libinput_get_fd(libinput);
     // TODO: apparently, libinput doesn't handle gamepads. So I need to open and add them to
     // this descriptor set myself. Sadge.
@@ -788,12 +841,6 @@ handle_timers :: (thread: *Thread) -> s64 {
     return 0;
 }
 
-start_logging_keys :: () {
-    event_handling_thread.starting_context.logger = my_logger;
-    thread_init(*event_handling_thread, start_logging_keys_in_a_thread);
-    thread_start(*event_handling_thread);
-}
-
 start_detecting_focused_program :: () {
     focused_programs_thread.starting_context.logger = my_logger;
     thread_init(*focused_programs_thread, detect_focused_program);
@@ -1013,53 +1060,9 @@ platform_init :: () -> success: bool, init_reason: string {
     thread_init(*timers_thread, handle_timers);
     thread_start(*timers_thread);
 
-    // libudev and libinput loading
-    libinput_loaded := load_libinput(
-        libnames=.["libinput.so", "libinput.so.10", "libinput.so.10.13.0"],
-        symbols=...[
-            "libinput_event_get_type",
-            "libinput_get_fd",
-            "libinput_udev_create_context",
-            "libinput_udev_assign_seat",
-            "libinput_dispatch",
-            "libinput_get_event",
-            "libinput_event_get_type",
-            "libinput_event_destroy",
-            "libinput_event_get_device",
-            "libinput_device_get_sysname",
-            "libinput_event_get_pointer_event",
-            "libinput_event_get_keyboard_event",
-            "libinput_event_keyboard_get_key",
-            "libinput_event_keyboard_get_key_state",
-        ],
-    );
-    if !libinput_loaded {
-        return false, "Could not load libinput\n";
-    }
-
-    libudev_loaded := load_libudev(
-        libnames=.["libudev.so", "libudev.so.1", "libudev.so.1.7.10"],
-        symbols=...["udev_new"],
-    );
-    // TODO: This should be in a separate thread, it affects startup times GREATLY!!!!
-    // udev and libinput
-    {
-        udev = udev_new();
-        if !udev_context {
-            return false, "Couldn't initialize udev context\n";
-        }
-
-        libinput = libinput_udev_create_context(*interface_, null, udev);
-        if !libinput {
-            return false, "Couldn't initialize libinput context\n";
-        }
-
-        // NOTE: Is there any issue with hardcoding a single seat here?
-        // Are setups where input devices are spread across multiple seats even exit?
-        if libinput_udev_assign_seat(libinput, "seat0") == -1 {
-            return false, "Libinput couldn't assign seat\n";
-        }
-    }
+    event_handling_thread.starting_context.logger = my_logger;
+    thread_init(*event_handling_thread, start_input_handling);
+    thread_start(*event_handling_thread);
 
     return true, "";
 }

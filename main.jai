@@ -807,8 +807,6 @@ main :: () {
     // TODO: Need to separate detecting focused program and setting up keyboard hook. Probably...
     start_detecting_focused_program();
 
-    start_logging_keys();
-
     Simp.set_render_target(the_window, .LEFT_HANDED);
     init_fonts(the_window);
     ui_init("", *gd_draw_procs);
