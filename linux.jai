@@ -435,6 +435,22 @@ is_our_virtual_test_keyboard :: (path: string) -> bool {
 }
 
 start_input_handling :: (thread: *Thread) -> s64 {
+    // Virtual devices stuff
+    {
+        success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
+        if !success {
+            log_error("Could not create a virtual keyboard, nothing will work\n");
+            return -1;
+        }
+
+        // Test keyboard to check if we are cooked
+        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[HEALTHCHECK_KEY]);
+        if !success {
+            log_error("Could not create a virtual keyboard for health checking. It might be dangerous to run without it, so we abort!\n");
+            return -1;
+        }
+    }
+
 
     // libudev and libinput loading
     libinput_loaded := load_libinput(
@@ -1132,20 +1148,6 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
-    // Virtual devices stuff
-    {
-        success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
-        if !success {
-            return false, "Could not create a virtual keyboard, nothing will work\n";
-        }
-
-        // Test keyboard to check if we are cooked
-        success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[HEALTHCHECK_KEY]);
-        if !success {
-            return false, "Could not create a virtual keyboard for health checking. It might be dangerous to run without it, so we abort!\n";
-        }
-    }
-
     // Healthcheck timers stuff
     timers_thread.starting_context.logger = my_logger;
     thread_init(*timers_thread, handle_timers);
