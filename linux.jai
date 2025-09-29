@@ -684,7 +684,6 @@ handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state
         }
         return;
     }
-
 }
 
 handle_libinput_device_removed :: (event: *libinput_event, uinput_fd: s32) {
@@ -1117,7 +1116,19 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
 
     fd := open(path_raw, flags);
     if fd == -1 {
-        // TODO: input group error message
+        log_error("Could not open %\n", path);
+        log_error(S(
+            "Make sure you are a member of input group ",
+            "(sudo usermod -a -G input your_username), ",
+            "or run Hitboxer with sudo\n",
+        ));
+        log_error(S(
+            "On Wayland compositors, you might not be able to ",
+            "run X11 GUI apps (which Hitboxer is) under sudo. ",
+            "So you might have to run `xhost +local:localuser:root` ",
+            "to enable that, and the same command but with `-` to disable\n",
+        ));
+        return -1;
     }
 
     if is_keyboard(fd, path) && uinput_fd > 0 {
@@ -1127,8 +1138,7 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
             table_add(*libinput_opened_devices, sysname, fd);
         }
 
-        // log("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
-        print("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
+        log("Grabbing % to pass its input through Hitboxer virtual keyboard\n", path);
         grab_result := ioctl(fd, EVIOCGRAB, 1);
         if grab_result < 0 {
             log_error("Could not grab % for controlling its inputs\n", path);
@@ -1255,6 +1265,9 @@ platform_deinit :: (window: Window_Type) {
     // If I don't destroy the virtual keyboard manually, I get stuck inputs when the program quits.
     ioctl(uinput_fd, UI_DEV_DESTROY);
     close(uinput_fd);
+
+    ioctl(test_uinput_fd, UI_DEV_DESTROY);
+    close(test_uinput_fd);
 }
 
 platform_wake_up_main_thread :: () {

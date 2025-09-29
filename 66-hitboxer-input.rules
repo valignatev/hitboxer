@@ -1,0 +1,22 @@
+# This is the udev rule you want to add in order to be able to access /dev/uinput,
+# which is required for Hitboxer to work.
+# If you have Steam installed, you most likely already have this and should not have issues with accessing /dev/uinput
+# But in case you do, we try to help you.
+
+# What this does, exactly:
+# This ensures that /dev/uinput exists (as in, if you run ls /dev, you'll see "uinput" file there)
+# and that currently logged-in user can read/write into it (this is what TAG+="uaccess" does).
+# To install the rule, you need to put this file into directory that contains other udev rules.
+# Usually it's one of these:
+# 1) /usr/lib/udev/rules.d/
+# 2) /etc/udev/rules.d/
+# 3) /usr/local/lib/udev/rules.d/
+# If you're using NixOs, consult their docs: https://search.nixos.org/options?show=services.udev.extraRules&query=services.udev
+
+# udev supposed to manually detect changes to rules files without requiring a restart.
+# but it doesn't do it on already existing devices. So you might have to run one of these:
+# udevadm control --reload
+# or
+# udevadm trigger
+# both as root
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

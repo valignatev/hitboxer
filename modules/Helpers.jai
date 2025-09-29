@@ -14,6 +14,9 @@ S :: ($strings: ..string) -> string #expand {
                 replaced := replace(it, "\"", "\\\"");
                 replaced = replace(replaced, "\n", "\\n");
                 replaced = replace(replaced, "\t", "\\t");
+                // Jai does not support vertical tab or whatever this is.
+                // replaced = replace(replaced, "\v", "\\v");
+                replaced = replace(replaced, "\r", "\\r");
                 replaced = replace(replaced, "%", "%%");
                 print_to_builder(*builder, replaced);
             }
