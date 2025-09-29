@@ -1468,6 +1468,27 @@ scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scro
     scroll_value.* = max_scroll_value;
 }
 
+hack_regular :: #run -> string {
+    content, success := read_entire_file("./data/Hack-Regular.ttf");
+    if success {
+        return content;
+    } else {
+        #import "Compiler";
+        compiler_report("Couldn't find data/Hack-Regular.ttf");
+    }
+    return "";
+}
+hack_bold :: #run -> string {
+    content, success := read_entire_file("./data/Hack-Bold.ttf");
+    if success {
+        return content;
+    } else {
+        #import "Compiler";
+        compiler_report("Couldn't find data/Hack-Bold.ttf");
+    }
+    return "";
+}
+
 init_fonts :: (window: Window_Type) {
     if !working_directory_set {
         path := path_strip_filename(System.get_path_of_running_executable());
@@ -1481,9 +1502,9 @@ init_fonts :: (window: Window_Type) {
     pixel_height := 600 / dpi / 26;
     header_height := 600 / dpi / 20;
     small_height := 600 / dpi / 36;
-    button_font = Simp.get_font_at_size("data", "Hack-Regular.ttf", cast(s64)(pixel_height * dpi));
-    small_label_font = Simp.get_font_at_size("data", "Hack-Regular.ttf", cast(s64)(small_height * dpi));
-    header_font = Simp.get_font_at_size("data", "Hack-Bold.ttf", cast(s64)(header_height * dpi));
+    button_font = Simp.get_font_at_size(hack_regular.([]u8), cast(s64)(pixel_height * dpi));
+    small_label_font = Simp.get_font_at_size(hack_regular.([]u8), cast(s64)(small_height * dpi));
+    header_font = Simp.get_font_at_size(hack_bold.([]u8), cast(s64)(header_height * dpi));
     assert(button_font != null);
 }
 
