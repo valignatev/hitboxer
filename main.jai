@@ -290,7 +290,12 @@ HEADER
 
 init_logging :: () {
     using current_program_state;
-    log_file=, success := file_open(log_file_path, for_writing=true, keep_existing_content=true);
+
+    success := init_log_ring(num_builders=4);
+    if !success {
+        log_error("Could not initialize the logger, the logging will by crappy!\n");
+    }
+    log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
 
     if !success {
         log_error("Couldn't open the log file, your errors will not be logged\n");
@@ -375,11 +380,11 @@ my_logger :: (message: string, data: *void, info: Log_Info) {
         formatted_message = tprint("%: %", date_s, message);
     }
 
-    // TODO: file_lenght (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
-    if !logging_initted {
+    // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
+    // if !logging_initted {
         runtime_support_default_logger(formatted_message, data, info);
         return;
-    }
+    // }
 
     length, success := file_length(log_file);
     if !success {
@@ -1540,7 +1545,7 @@ GetRect_Type_Indicator :: struct {
     Texture :: Simp.Texture;
 }
 
-#import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
+using,except(log, log_error) Basic :: #import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
 #import "Hash_Table";
 Input :: #import "Input";
 Simp :: #import "Simp";
@@ -1554,4 +1559,4 @@ tfh :: #import "Text_File_Handler";
 #import "File";
 #import "File_Utilities";
 #import "Control_Flow";
-
+#import "Looger";

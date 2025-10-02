@@ -545,7 +545,7 @@ start_input_handling :: (thread: *Thread) -> s64 {
 
 #if DEBUG {
             if state == .LIBINPUT_KEY_STATE_PRESSED {
-                print("% pressed (%)\n", get_key_name(key), key);
+                log("% pressed (%)\n", get_key_name(key), key);
             }
 }
 
@@ -842,6 +842,7 @@ handle_timers :: (thread: *Thread) -> s64 {
         // TODO: errno
         log_error("Could not create an ungrab timer. You might be in danger!\n");
     } else {
+        log("%\n", "timerfd created\n");
         timer_spec: itimerspec;
         timer_spec.it_value = .{tv_sec=5};
         timer_spec.it_interval = .{tv_sec=5};
