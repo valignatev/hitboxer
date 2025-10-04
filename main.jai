@@ -293,8 +293,9 @@ init_logging :: () {
 
     success := init_log_ring(num_builders=4);
     if !success {
-        log_error("Could not initialize the logger, the logging will by crappy!\n");
+        log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
+
     log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
 
     if !success {
@@ -302,6 +303,9 @@ init_logging :: () {
     } else {
         logging_initted = true;
     }
+    logging_thread.starting_context.logger = my_logger;
+    thread_init(*logging_thread, handle_logging);
+    thread_start(*logging_thread);
 }
 
 
