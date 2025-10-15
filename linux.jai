@@ -635,7 +635,7 @@ handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state
                 old_source_code := active_mapping.source.code;
                 if old_source_code == KEY_RESERVED next_state = .SETTING_DESTINATION;
 
-                found, old_binding_from_old_source := table_find_new(*active_profile_in_ui.mappings, old_source_code);
+                found, old_binding_from_old_source := table_find(*active_profile_in_ui.mappings, old_source_code);
                 print("Old source is %\n", old_binding_from_old_source);
 
                 active_mapping.*.source.code = ev.code;
@@ -773,7 +773,7 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
     if bind.mode == .OPPOSITE || bind.mode == .NEUTRAL || bind.mode == .OPPOSITE_NO_REPRESS {
         opposing_code := bind.code;
 
-        found, device_fd := table_find_new(*libinput_opened_devices, device_sysname);
+        found, device_fd := table_find(*libinput_opened_devices, device_sysname);
         if !found {
             log_error("Can't get an open file descriptor for %\n", device_sysname);
             return;
@@ -933,7 +933,7 @@ handle_timers :: (thread: *Thread) -> s64 {
 }
 
 start_detecting_focused_program :: () {
-    focused_programs_thread.starting_context.logger = my_logger;
+    focused_programs_thread.starting_context.logger = looger;
     thread_init(*focused_programs_thread, detect_focused_program);
     thread_start(*focused_programs_thread);
 }
@@ -1160,11 +1160,11 @@ interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
     // Healthcheck timers stuff
-    timers_thread.starting_context.logger = my_logger;
+    timers_thread.starting_context.logger = looger;
     thread_init(*timers_thread, handle_timers);
     thread_start(*timers_thread);
 
-    event_handling_thread.starting_context.logger = my_logger;
+    event_handling_thread.starting_context.logger = looger;
     thread_init(*event_handling_thread, start_input_handling);
     thread_start(*event_handling_thread);
 
@@ -1172,8 +1172,10 @@ platform_init :: () -> success: bool, init_reason: string {
 }
 
 
-platform_set_logging_and_config_file_paths :: () {
-    using current_program_state;
+platform_get_logging_and_config_file_paths :: () -> string, string {
+    log_file_path: string;
+    config_file_path: string;
+
     user_home := to_string(getenv("HOME".data));
     if (!user_home) {
         log_error("Could not determine your home directory path, can't initialize logging and read config!\n");
@@ -1232,7 +1234,7 @@ platform_set_logging_and_config_file_paths :: () {
         config_dir := path_to_string(config_path,, temp);
 
         array_add(*config_path.words, "settings.socd");
-        config_file_path = path_to_string(config_path);
+        current_program_state.config_file_path = path_to_string(config_path);
 
         fully_exists, how_much = how_much_of_path_exists_on_the_local_filesystem(config_path,, temp);
         config_dir_initted := false;
@@ -1256,6 +1258,7 @@ platform_set_logging_and_config_file_paths :: () {
             config_dir_initted = true;
         }
     }
+    return log_file_path, config_file_path;
 }
 
 platform_after_window_created :: (window: Window_Type) -> bool {
@@ -1282,7 +1285,6 @@ platform_wait_for_message :: inline () -> need_to_rerender: bool {
 
 libc :: #library,system "libc";
 c_free :: (memory: *void) #foreign libc "free";
-sendfile :: (out_fd: s32, in_fd: s32, offset: *s64, count: u64) -> s64 #foreign libc;
 
 #import "Memory";
 #import "POSIX";

@@ -1,216 +1,305 @@
+#module_parameters(DEBUG := false);
+
 logging_thread: Thread;
-logging_efd: s32;
 
-String_Builder_Ring :: struct {
-    num_builders: u32;
-    builder_size: u32; // in bytes
-    builders: []String_Builder;
+Looger :: struct {
+    initted: bool;
+    max_log_file_size := 1000_000;
+    log_file: File;
+    log_file_path: string;
+    also_log_to_stdout: bool;
+    per_thread: []Looger_Per_Thread;
+}
 
+
+looger_global: Looger;
+
+
+Looger_Per_Thread :: struct {
+    pool: Flat_Pool;
+    // Flat_Pool's flat_pool_allocator_proc
     allocator: Allocator;
-
-    write_positions: []Write_Position;
+    // TODO: We might allocate array itself onto the same pool, at the start of it,
+    // and then reset the pool to the end of the array water mark. We'll need a
+    // custom reset procedure for this
+    log_strings: [..]Log_String;
+    // 1-based. 0 means we haven't seen logs yet
+    last_seen_log: s64;
 }
 
-Write_Position :: struct {
-    current_substring: s64;
-    current_builder_length: s64;
-    substrings: [..]Builder_Substring;
-}
 
-Builder_Substring :: struct {
-    buffer: *String_Builder.Buffer;
-    offset: s64; // offset into the buffer where the string starts;
-    count: s64; // length of the string
+Log_String :: struct {
+    message: string;
     info: Log_Info;
-    occupied: bool;
+    data: *void;
 }
 
 
-log_ring: *String_Builder_Ring;
+init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32, also_log_to_stdout: bool = false) -> success: bool {
+    looger_global.per_thread = NewArray(num_threads, Looger_Per_Thread);
+    looger_global.log_file_path = log_file_path;
+    looger_global.also_log_to_stdout = also_log_to_stdout;
+    looger_global.max_log_file_size = max_log_file_size;
 
-
-init_log_ring :: (num_builders: u32) -> success: bool {
-    // Make size per builder buffer the same as in String_Builder.jai for easier write_position calculation.
-    // Might make it more fancy later.
-    size_per_builder_buffer: u32 = 4096 - size_of(String_Builder.Buffer);
-
-    log_ring = New(String_Builder_Ring);
-    if log_ring == null {
-        log_error("Could not allocate log buffer\n");
-        return false;
+    for * looger_global.per_thread {
+        init(*it.pool, reserve=4096);
+        it.allocator.proc = flat_pool_allocator_proc;
+        it.allocator.data = *it.pool;
+        // at 4096 bytes per string arena, 30 strings have roughtly 40 bytes per string
+        // which sounds like kinda enough.
+        array_reserve(*it.log_strings, 100);
     }
 
-    log_ring.num_builders = num_builders;
-    log_ring.builder_size = size_per_builder_buffer;
+    file_open_success: bool;
+    looger_global.log_file, file_open_success = file_open(looger_global.log_file_path, for_writing=true, keep_existing_content=true);
 
-    log_ring.builders = NewArray(num_builders, String_Builder);
-    for * log_ring.builders {
-        init_string_builder(it, buffer_size=size_per_builder_buffer);
+    if !file_open_success {
+        log_error("Couldn't open the log file, your errors will only be logged to the console\n");
+    } else {
+        looger_global.initted = true;
     }
 
-    log_ring.write_positions = NewArray(num_builders, Write_Position);
-    // TODO: Can't iterate over pointers here for some reason. Maybe a compiler bug.
-    for log_ring.write_positions {
-        array_resize(*it.substrings, 20, initialize=false);
-    }
     return true;
 }
 
-log :: (format_string: string, args: .. Any, loc := #caller_location, flags := Log_Flags.NONE, user_flags : u32 = 0, section : *Log_Section = null) {
-
-    // TODO: this is temporary, only works for my program because I know that
-    // thread №1 is logging thread!
+looger :: (message: string, data: *void, info: Log_Info) {
+    // NOTE: We allow logging thread to log itself through the same facility. Yolo!
     tid := context.thread_index;
-    if tid > 0 tid -= 1;
+    per_thread := *looger_global.per_thread[tid];
 
-    builder := *log_ring.builders[tid];
-    wp := *log_ring.write_positions[tid];
+    currently_allocated := per_thread.pool.current_point - per_thread.pool.memory_base;
 
-    if wp.current_substring >= wp.substrings.count {
-        // resetting the counters here might happen while logging thread depletes substrings if it's
-        // not fast enough. I don't want to synchronize them, but I need to reliable way to catch it to assess how
-        // likely it is to happen.
-        wp.current_substring = 0;
-        wp.current_builder_length = 0;
-        builder.current_buffer = get_base_buffer(builder);
-        builder.current_buffer.count = 0;
+    #if DEBUG {
+        print("[%]: currently_allocated: %\n", tid, currently_allocated);
     }
 
-    current_buffer := get_current_buffer(builder);
-    buffer_offset := current_buffer.count;
-
-    current_substring := *wp.substrings[wp.current_substring];
-    current_substring.occupied = false;
-    current_substring.buffer = current_buffer;
-    current_substring.offset = buffer_offset;
-
-    current_substring.info.source_identifier = context.log_source_identifier;
-    current_substring.info.location          = loc;
-    current_substring.info.common_flags      = flags;
-    current_substring.info.user_flags        = user_flags;
-    current_substring.info.section           = section;
-
-    // No error recovery from here.
-    print_to_builder(builder, format_string, ..args);
-
-    length := builder_string_length(builder);
-    current_substring.count = length - wp.current_builder_length;
-    current_substring.occupied = true;
-    wp.current_builder_length = length;
-    wp.current_substring += 1;
-    #if OS == .LINUX {
-        // If we send 0 as a value, then read will either block or return EAGAIN,
-        // so we're incrementing thread id by one here, and then subtracting it on
-        // receiving end.
-        val: u64 = tid + 1;
-        print("val: %\n", val);
-        s := write(logging_efd, *val, size_of(u64));
-        if s != size_of(s64) {
-            context.logger("Could not trigger proper logging", context.logger_data, current_substring.info);
+    if currently_allocated + message.count >= 4096 {
+        #if DEBUG {
+            print(
+                "[%] ACHKTUNG!!!! POOL HAS % ALLOCATED WITH % STRINGS, TRYING TO ADD %\n",
+                tid, currently_allocated, per_thread.log_strings.count, currently_allocated + message.count,
+            );
         }
+
+        while per_thread.log_strings.count > per_thread.last_seen_log {
+            // Waking the consumer thread in case it's waiting, so we don't spin forever.
+            wake(*conditional);
+            #if DEBUG {
+                print("[%] SPINNING\n", tid);
+            }
+            spin();
+        }
+
+        atomic_swap(*per_thread.last_seen_log, 0);
+        array_reset_keeping_memory(*per_thread.log_strings);
+        reset(*per_thread.pool);
     }
-    // context.logger(s, context.logger_data, info);
-} @PrintLike
 
+    message_in_the_pool := copy_string(message,, per_thread.allocator);
 
-log_error :: (format_string: string, args: .. Any, loc := #caller_location, flags := Log_Flags.NONE, user_flags : u32 = 0, section : *Log_Section = null) {
-    // In case people prefer to say log_error instead of putting a flags argument on the end,
-    // we provide this for convenience. Not really sure if it's worth it, but here you go.
-    new_flags := flags | .ERROR;
-    log(format_string, ..args, loc, new_flags, user_flags, section);
-} @PrintLike
+    log_string: Log_String;
+    log_string.message = message_in_the_pool;
+    log_string.info = info;
+    log_string.data = data;
+    // put mutex around it?
+    array_add(*per_thread.log_strings, log_string);
+    // unlock the array
+
+    wake(*conditional);
+}
 
 
 handle_logging :: (thread: *Thread) -> s64 {
-    #if OS == .WINDOWS {
-        // TODO: implement;
 
-    } else #if OS == .LINUX {
-        logging_efd = eventfd(0, 0);
-        if logging_efd == -1 {
-            log_error("Could not start logging thread, error code: %\n", errno());
+    has_work_to_do := false;
+    while true {
+        // We check if there's work to do
+
+        for * pt, pti: looger_global.per_thread {
+
+            if pt.log_strings && pt.log_strings.count > pt.last_seen_log {
+                has_work_to_do = true;
+                break;
+            }
         }
 
-        while true {
-            pfd: [1]pollfd;
-            pfd[0].fd = logging_efd;
-            pfd[0].events = POLLIN;
+        // But then here, after we checked, but before we went to sleep,
+        // thread added work and called wake. Since we're not waiting just yet,
+        // wake is wasted, and we then wait instead of consuming the work.
+        if !has_work_to_do {
+            // if there is no work to do, we wait on condition
+            wait(*conditional, *mutex);
+            continue;
+        }
 
-            result := poll(pfd.data, xx pfd.count, -1);
-
-            if result < 0 {
-                error := errno();
-                log_error("Polling on logging file descriptor failed: %\n", error);
-            }
-
-            tid: u64;
-            s := read(logging_efd, *tid, size_of(u64));
-            if s != size_of(u64) {
-                error := errno();
-                log_error("Something is wrong with reading logging event: %\n", error);
-            }
-            tid -= 1;
-
-            // Deplete logging queue
-            print("Depleting logging queue from thread №: %\n", tid);
-
-            wp := *log_ring.write_positions[tid];
-            builder := *log_ring.builders[tid];
-            for * wp.substrings {
-                if it.occupied {
-
-                    s := builder_to_substring(builder, it);
-                    print("%: substring: %\n", it_index, s);
-                }
+        for * pt, pti: looger_global.per_thread {
+            log_strings := array_view(pt.log_strings, pt.last_seen_log);
+            for log_strings {
+                write_log(it);
+                atomic_increment(*pt.last_seen_log);
             }
         }
     }
+
     return 0;
 }
 
 
-builder_to_substring :: (builder: *String_Builder, substring: *Builder_Substring) -> string {
-    count := substring.count;
-    offset := substring.offset;
-    if !count {
-        return "";
+write_log :: (using log_string: Log_String) {
+    using looger_global;
+    now := current_time_consensus();
+    calendar_utc := to_calendar(now, .UTC);
+    date_s := calendar_to_string(calendar_utc);
+    formatted_message: string;
+    if message[message.count - 1] != #char "\n" {
+        formatted_message = tprint("%: %\n", date_s, message);
+    } else {
+        formatted_message = tprint("%: %", date_s, message);
     }
 
-    result: string = ---;
-    // TODO: allocate hwere???
-    result.data  = alloc(count);
-    result.count = count;
+    if !initted {
+        runtime_support_default_logger(formatted_message, data, info);
+        return;
+    }
+    if also_log_to_stdout {
+        runtime_support_default_logger(message, data, info);
+    }
 
-    data := result.data;
-    buffer := substring.buffer;
-    to_copy := count;
-    while buffer && to_copy {
-        assert(to_copy >= 0, "FUCK! to_copy is: %\n", to_copy);
-        assert(buffer.count > 0, "We got ourselves a race condition! to_copy: % \n", to_copy);
+    // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
+    length, success := file_length(log_file);
+    if !success {
 
-        if to_copy > buffer.count - offset {
-            to_copy = buffer.count - offset;
-            // This means we fully depleted the buffer, so we can reset its count;
-            buffer.count = 0;
+        // Just one attempt to reopen the log file again.
+        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_open\n", data, info);
+            return;
         }
 
-        memcpy(data, get_buffer_data(buffer) + offset, to_copy);
-        data += to_copy;
+        length, success = file_length(log_file);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_len\n", data, info);
+            return;
+        }
 
-        buffer = buffer.next;
-        to_copy = count - to_copy;
-        offset = 0;
+    }
+    if length {
+        if length > max_log_file_size {
+            rotate_log_file(data, info);
+        }
+
+        length=, success := file_length(log_file);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_length after truncation\n", data, info);
+            return;
+        }
+
+        success = file_set_position(log_file, length);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_set_position\n", data, info);
+            return;
+        }
     }
 
-    substring.occupied = false;
-    return result;
+    success = file_write(*log_file, xx formatted_message.data, formatted_message.count);
+    if !success {
+        runtime_support_default_logger("Couldn't write to the log file: file_write\n", data, info);
+        return;
+    }
 }
+
+
+// When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
+// delete everything else from the beginning;
+rotate_log_file :: (data: *void, info: Log_Info) {
+    using looger_global;
+
+    error_info := info;
+    error_info.common_flags |= .ERROR;
+
+    #if OS == .LINUX {
+        file_in := fileno(log_file.handle);
+        found, left, right := split_from_right(log_file_path, #char "/");
+        assert(found, "Something wrong with the log file path\n", log_file_path);
+        temp_log_file_path := join(left, "log_temp.txt", separator="/" ,, temp);
+        new_log_file, success := file_open(temp_log_file_path, for_writing=true);
+
+        if !success {
+            // MessageBox on windows?
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+            return;
+        }
+
+        file_out := fileno(new_log_file.handle);
+
+        // TODO: This is kind of stupid because it moves some random part of the log instead
+        //  of being on at a line boundary.
+        log_size:, success = file_length(log_file);
+        offset := log_size - (max_log_file_size * 0.1).(s64);
+        size : u64 = 100_000;
+        if success {
+            size = (max_log_file_size * 0.1).(u64);
+        }
+
+        result := sendfile(file_out, file_in, *offset, size);
+
+        if result == -1 {
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+            return;
+        }
+
+        file_close(*log_file);
+
+        // This doesn't do any error reporting lol
+        file_move(temp_log_file_path, log_file_path);
+
+        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
+
+        if !success {
+            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
+        }
+
+        success = file_write(*log_file, "\n**********\n".data, "\n**********\n".count);
+        if !success {
+            runtime_support_default_logger("Couldn't write to the log file: file_write\n", data, info);
+            return;
+        }
+    }
+}
+
+
+#scope_module
+
+
+conditional: Condition_Variable;
+mutex: Mutex;
+
 
 #scope_file
 
-using,except(log, log_error) Basic :: #import "Basic";
+
+spin :: () {
+    #if CPU == .X64 {
+        #asm {
+            pause;
+        }
+    } else #if CPU == .ARM64 {
+        #bytes .[0x3F, 0x20, 0x03, 0xD5]; // YIELD
+    } else {
+        #assert false;
+    }
+}
+
+
+#import "Atomics";
+#import "Basic";
 #import "Thread";
+#import "File";
+#import "Flat_Pool";
+#import "String";
 
 #if OS == .LINUX {
     #import "POSIX";
+
+    sendfile :: (out_fd: s32, in_fd: s32, offset: *s64, count: u64) -> s64 #foreign libc;
 }

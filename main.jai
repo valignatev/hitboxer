@@ -33,7 +33,6 @@ scroll_value_new_profile: float;
 
 the_window: *Window;
 
-max_log_file_size := 1000_000;
 the_window_hidden := false;
 window_width: s32 = 900;
 window_height: s32 = 800;
@@ -75,9 +74,6 @@ Program_State :: struct {
     runtime_debug := false;
     // need_to_scroll_mappings_region: bool;
 
-    logging_initted := false;
-    log_file: File;
-    log_file_path: string = "log.txt";
     config_file_path: string = "settings.socd";
 }
 dummy_input_text_state: Text_Input_State;
@@ -88,7 +84,7 @@ dummy_bind := Mapping_Bind.{};
 get_key_mapping :: (source_scan_code: u32) -> Mapping_Bind {
     using current_program_state;
 
-    found, destination := table_find_new(*active_profile.mappings, source_scan_code);
+    found, destination := table_find(*active_profile.mappings, source_scan_code);
     if !found return dummy_bind;
     return destination;
 }
@@ -288,154 +284,26 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
-init_logging :: () {
-    using current_program_state;
-
-    success := init_log_ring(num_builders=4);
+init_logging :: (log_file_path: string) {
+    success := init_looger(
+        num_threads=5,
+        log_file_path=log_file_path,
+        max_log_file_size=1000_000,
+        also_log_to_stdout=DEBUG,
+    );
     if !success {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
 
-    log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
-
-    if !success {
-        log_error("Couldn't open the log file, your errors will not be logged\n");
-    } else {
-        logging_initted = true;
-    }
-    logging_thread.starting_context.logger = my_logger;
+    logging_thread.starting_context.logger = looger;
     thread_init(*logging_thread, handle_logging);
     thread_start(*logging_thread);
 }
 
 
-// TODO: THREAD SAFETY - now, at least on linux, this shit will get called from 3 different
-// threads and it will spectacularly collapse! The solution is to log everything into an array that
-// a separate thread for logging will consume and call this logger, which doesn't have to be
-// thread-safe on its own.
-
-// When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
-// delete everything else from the beginning;
-rotate_log_file :: (data: *void, info: Log_Info) {
-    using current_program_state;
-    error_info := info;
-    error_info.common_flags |= .ERROR;
-
-    #if OS == .LINUX {
-        file_in := fileno(log_file.handle);
-        found, left, right := split_from_right(log_file_path, #char "/");
-        assert(found, "Something wrong with the log file path\n", log_file_path);
-        temp_log_file_path := join(left, "log_temp.txt", separator="/" ,, temp);
-        new_log_file, success := file_open(temp_log_file_path, for_writing=true);
-
-        if !success {
-            // MessageBox on windows?
-            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
-            return;
-        }
-
-        file_out := fileno(new_log_file.handle);
-
-        // TODO: This is kind of stupid because it moves some random part of the log instead
-        //  of being on at a line boundary.
-        log_size:, success = file_length(log_file);
-        offset := log_size - (max_log_file_size * 0.1).(s64);
-        size : u64 = 100_000;
-        if success {
-            size = (max_log_file_size * 0.1).(u64);
-        }
-
-        result := sendfile(file_out, file_in, *offset, size);
-
-        if result == -1 {
-            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
-            return;
-        }
-
-        file_close(*log_file);
-
-        // This doesn't do any error reporting lol
-        file_move(temp_log_file_path, log_file_path);
-
-        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
-
-        if !success {
-            runtime_support_default_logger("Could not rotate logs, please delete log.txt manually\n", data, error_info);
-        }
-
-        success = file_write(*log_file, "\n**********\n".data, "\n**********\n".count);
-        if !success {
-            runtime_support_default_logger("Couldn't write to the log file: file_write\n", data, info);
-            return;
-        }
-    }
-}
-
-my_logger :: (message: string, data: *void, info: Log_Info) {
-    using current_program_state;
-
-    now := current_time_consensus();
-    calendar_utc := to_calendar(now, .UTC);
-    date_s := calendar_to_string(calendar_utc);
-    formatted_message: string;
-    if message[message.count - 1] != #char "\n" {
-        formatted_message = tprint("%: %\n", date_s, message);
-    } else {
-        formatted_message = tprint("%: %", date_s, message);
-    }
-
-    // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
-    // if !logging_initted {
-        runtime_support_default_logger(formatted_message, data, info);
-        return;
-    // }
-
-    length, success := file_length(log_file);
-    if !success {
-
-        // Just one attempt to reopen the log file again.
-        log_file, success = file_open(log_file_path, for_writing=true, keep_existing_content=true);
-        if !success {
-            runtime_support_default_logger("Couldn't write to the log file: file_open\n", data, info);
-            return;
-        }
-
-        length, success = file_length(log_file);
-        if !success {
-            runtime_support_default_logger("Couldn't write to the log file: file_len\n", data, info);
-            return;
-        }
-
-    }
-    if length {
-        if length > max_log_file_size {
-            rotate_log_file(data, info);
-        }
-
-        length=, success := file_length(log_file);
-        if !success {
-            runtime_support_default_logger("Couldn't write to the log file: file_length after truncation\n", data, info);
-            return;
-        }
-
-        success = file_set_position(log_file, length);
-        if !success {
-            runtime_support_default_logger("Couldn't write to the log file: file_set_position\n", data, info);
-            return;
-        }
-    }
-
-    success = file_write(*log_file, xx formatted_message.data, formatted_message.count);
-    if !success {
-        runtime_support_default_logger("Couldn't write to the log file: file_write\n", data, info);
-        return;
-    }
-}
-
-
 push_my_context :: () #expand {
     `my_context: #Context;
-    `my_context.logger = my_logger;
+    `my_context.logger = looger;
 
     `push_context,defer_pop my_context;
 }
@@ -749,8 +617,6 @@ finalize_state :: () {
 }
 
 main :: () {
-    context.logger = my_logger;
-
     current_program_state = .{
         active_state=.NOTHING,
         next_state=.NOTHING,
@@ -760,8 +626,10 @@ main :: () {
     };
     using current_program_state;
 
-    platform_set_logging_and_config_file_paths();
-    init_logging();
+    log_file_path, config_path := platform_get_logging_and_config_file_paths();
+    init_logging(log_file_path);
+    // TODO: temp
+    context.logger = looger;
 
     success_init, init_reason := platform_init();
     if !success_init {
@@ -1549,7 +1417,7 @@ GetRect_Type_Indicator :: struct {
     Texture :: Simp.Texture;
 }
 
-using,except(log, log_error) Basic :: #import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
+#import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
 #import "Hash_Table";
 Input :: #import "Input";
 Simp :: #import "Simp";

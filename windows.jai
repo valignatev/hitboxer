@@ -409,7 +409,7 @@ get_list_of_programs :: () -> [..]string {
         name_lower := to_lower_copy(name,, temp);
         search_lower := to_lower_copy(active_search.text,, temp);
         if (active_search.text.count && contains(name_lower, search_lower)) || !active_search.text.count {
-            found, _ := table_find_new(*_opened_programs, name);
+            found, _ := table_find(*_opened_programs, name);
             if !found {
                 copied_string := copy_string(name,, temp);
                 table_set(*_opened_programs, copied_string, true);

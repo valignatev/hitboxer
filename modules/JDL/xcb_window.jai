@@ -872,7 +872,7 @@ xcb_clipboard_set_text :: (display: *Display, text: string) {
 #scope_file
 
 atom_name :: (d: *XCB_Display, atom: xcb_atom_t) -> string {
-    found, name := table_find_new(*d.atom_names, atom);
+    found, name := table_find(*d.atom_names, atom);
     if found return name;
 
     xcb_err: *xcb_generic_error_t;

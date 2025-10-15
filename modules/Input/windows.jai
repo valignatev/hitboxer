@@ -20,14 +20,14 @@ set_custom_cursor_handling :: (is_custom: bool) {
 //#scope_export
 
 get_key_code :: (wParam: WPARAM) -> Key_Code {
-    found, value := table_find_new(*vk_to_key_code, wParam);
+    found, value := table_find(*vk_to_key_code, wParam);
 
     if found return value;
     return UNKNOWN;
 }
 
 get_vk :: (key: Key_Code) -> VK: u64 {
-    found, value := table_find_new(*key_code_to_vk, key);
+    found, value := table_find(*key_code_to_vk, key);
 
     if found return value;
     return 0;
