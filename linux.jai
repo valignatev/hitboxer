@@ -172,18 +172,20 @@ detect_focused_program :: (thread: *Thread) -> error_code: s64 {
                 // another X11 window. But I get only one focus event when I switch from
                 // Wayland window to X11 window. Weird, on pure X11 this doesn't happen.
 
-                // TODO: Grabbing the server is kinda expensive and disruptive. And the only upside is that
-                // it guarantees that the window that is focused won't get unfocused or destroyed
-                // while we're fetching its options, which isn't a hard requirements for us.
-                // So maybe we don't need to grab the server and just handle the situation where we get bogus
-                // properties instead. Most likely, we'll get xcb_window_error_t
-                xcb_grab_server(con);
+                // NOTE: We used to grab the server with xcb_grab (and then xcb_ungrab),
+                // but it is expensive and disruptive. And if one of the x11 calls in-between
+                // happens to block - we absolutely cockblock the client session.
+                // And the only upside is that it guarantees that the window that is focused
+                // won't get unfocused or destroyed while we're fetching its name,
+                // which we really don't care about.
+                // So we don't grab the server anymore and just try to handle the situation
+                // where we get bogus properties instead.
+                // Most likely, we'll get xcb_window_error_t
                 input_focus_reply := xcb_get_input_focus_reply(con, xcb_get_input_focus(con), null);
                 focused_window := input_focus_reply.focus;
 
                 name := get_x11_window_name(focused_window);
                 log("Name: %\n", name);
-                xcb_ungrab_server(con);
                 xcb_flush(con);
                 // TODO: Better way to handle the title name, contains is probably not very
                 // robust. Also it's case-sensitive for now :(
