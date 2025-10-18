@@ -244,17 +244,31 @@ get_x11_window_name :: (window: u32) -> string {
     // On Sway, I get no reply when the X11 window loses focus and it switches
     // to a Wayland-native application. So I let it be...
     if !name_reply && !name_old_reply {
-        // Maybe socd unhook logic here
-        xcb_ungrab_server(con);
-        xcb_flush(con);
+        if name_error {
+            log_warning(
+                "Error getting _NET_WM_NAME for window %: error code %",
+                window,
+                name_error.error_code,
+            );
+            c_free(name_error);
+        }
+        if name_old_error {
+            log_warning(
+                "Error getting WM_NAME for window %: error code %",
+                window,
+                name_old_error.error_code,
+            );
+            c_free(name_old_error);
+        }
+
         return "";
     }
 
-    name_len := xcb_get_property_value_length(name_reply);
-    name_old_len := xcb_get_property_value_length(name_old_reply);
+    name_len := ifx name_reply xcb_get_property_value_length(name_reply) else 0;
+    name_old_len := ifx name_old_reply xcb_get_property_value_length(name_old_reply) else 0;
     if !name_len {
         result.count = name_old_len;
-        result.data = xcb_get_property_value(name_old_reply);
+        result.data = ifx name_old_reply xcb_get_property_value(name_old_reply) else null;
     } else {
         result.count = name_len;
         result.data = xcb_get_property_value(name_reply);
@@ -452,7 +466,6 @@ start_input_handling :: (thread: *Thread) -> s64 {
             return -1;
         }
     }
-
 
     // libudev and libinput loading
     libinput_loaded := load_libinput(
