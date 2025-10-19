@@ -61,15 +61,11 @@ init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32,
 }
 
 looger :: (message: string, data: *void, info: Log_Info) {
-    // NOTE: We allow logging thread to log itself through the same facility. Yolo!
+    // NOTE: We allow logging thread to log itself through the same facility because why not.
     tid := context.thread_index;
     per_thread := *looger_global.per_thread[tid];
 
     currently_allocated := per_thread.pool.current_point - per_thread.pool.memory_base;
-
-    #if DEBUG {
-        print("[%]: currently_allocated: %\n", tid, currently_allocated);
-    }
 
     log_size := size_of(Log_String) + message.count;
 
