@@ -41,6 +41,7 @@ init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32,
     looger_global.max_log_file_size = max_log_file_size;
 
     for * looger_global.per_thread {
+        it.pool.alignment = 8;
         init(*it.pool, reserve=4096);
         it.allocator.proc = flat_pool_allocator_proc;
         it.allocator.data = *it.pool;
@@ -60,20 +61,21 @@ init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32,
     return true;
 }
 
+
 looger :: (message: string, data: *void, info: Log_Info) {
     // NOTE: We allow logging thread to log itself through the same facility because why not.
     tid := context.thread_index;
     per_thread := *looger_global.per_thread[tid];
 
-    currently_allocated := per_thread.pool.current_point - per_thread.pool.memory_base;
-
     log_size := size_of(Log_String) + message.count;
 
-    if currently_allocated + log_size >= 4096 {
+    current_point := FP.Align(per_thread.pool.current_point, per_thread.pool.alignment);
+
+    if current_point + log_size > per_thread.pool.address_limit {
         #if DEBUG {
             print(
-                "[%] Resetting log_strings pool: has %, trying to add: %\n",
-                tid, currently_allocated, log_size,
+                "[%] Resetting log_strings pool: trying to add: %, allocated: %\n",
+                tid, log_size, per_thread.pool.current_point - per_thread.pool.memory_base,
             );
         }
 
@@ -104,8 +106,8 @@ looger :: (message: string, data: *void, info: Log_Info) {
 
 
 handle_logging :: (thread: *Thread) -> s64 {
-
     has_work_to_do := false;
+
     while true {
         // We check if there's work to do
         for * pt, pti: looger_global.per_thread {
