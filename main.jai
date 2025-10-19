@@ -295,9 +295,9 @@ init_logging :: (log_file_path: string) {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
 
-    logging_thread.starting_context.logger = looger;
-    thread_init(*logging_thread, handle_logging);
-    thread_start(*logging_thread);
+    looger_global.thread.starting_context.logger = looger;
+    thread_init(*looger_global.thread, handle_logging);
+    thread_start(*looger_global.thread);
 }
 
 
@@ -1431,4 +1431,4 @@ tfh :: #import "Text_File_Handler";
 #import "File";
 #import "File_Utilities";
 #import "Control_Flow";
-#import "Looger";
+#import "Looger"(DEBUG=DEBUG);

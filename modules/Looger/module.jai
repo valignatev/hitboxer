@@ -1,9 +1,8 @@
 #module_parameters(DEBUG := false);
 
-logging_thread: Thread;
-
 Looger :: struct {
     initted: bool;
+    thread: Thread;
     max_log_file_size := 1000_000;
     log_file: File;
     log_file_path: string;
@@ -19,17 +18,17 @@ Looger_Per_Thread :: struct {
     pool: Flat_Pool;
     // Flat_Pool's flat_pool_allocator_proc
     allocator: Allocator;
-    // TODO: We might allocate array itself onto the same pool, at the start of it,
-    // and then reset the pool to the end of the array water mark. We'll need a
-    // custom reset procedure for this
-    log_strings: [..]Log_String;
-    // 1-based. 0 means we haven't seen logs yet
-    last_seen_log: s64;
+    // These are absolute addresses that always point into the pool.
+    // If I don't like this, I might turn them into offsets relative to pool's memory_base.
+    // We store Log_String header, immediately followed by its message .data
+    write_offset: *u8;
+    read_offset: *u8;
 }
 
 
 Log_String :: struct {
     message: string;
+    thread_index: u32;
     info: Log_Info;
     data: *void;
 }
@@ -45,9 +44,8 @@ init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32,
         init(*it.pool, reserve=4096);
         it.allocator.proc = flat_pool_allocator_proc;
         it.allocator.data = *it.pool;
-        // at 4096 bytes per string arena, 30 strings have roughtly 40 bytes per string
-        // which sounds like kinda enough.
-        array_reserve(*it.log_strings, 100);
+        it.write_offset = it.pool.memory_base;
+        it.read_offset = it.pool.memory_base;
     }
 
     file_open_success: bool;
@@ -73,38 +71,38 @@ looger :: (message: string, data: *void, info: Log_Info) {
         print("[%]: currently_allocated: %\n", tid, currently_allocated);
     }
 
-    if currently_allocated + message.count >= 4096 {
+    log_size := size_of(Log_String) + message.count;
+
+    if currently_allocated + log_size >= 4096 {
         #if DEBUG {
             print(
-                "[%] ACHKTUNG!!!! POOL HAS % ALLOCATED WITH % STRINGS, TRYING TO ADD %\n",
-                tid, currently_allocated, per_thread.log_strings.count, currently_allocated + message.count,
+                "[%] Resetting log_strings pool: has %, trying to add: %\n",
+                tid, currently_allocated, log_size,
             );
         }
 
-        while per_thread.log_strings.count > per_thread.last_seen_log {
+        while per_thread.write_offset > per_thread.read_offset {
             // Waking the consumer thread in case it's waiting, so we don't spin forever.
             wake(*conditional);
             #if DEBUG {
-                print("[%] SPINNING\n", tid);
+                print("[%] logger spinning\n", tid);
             }
             spin();
         }
 
-        atomic_swap(*per_thread.last_seen_log, 0);
-        array_reset_keeping_memory(*per_thread.log_strings);
+        atomic_swap(*per_thread.write_offset, per_thread.pool.memory_base);
+        atomic_swap(*per_thread.read_offset, per_thread.pool.memory_base);
         reset(*per_thread.pool);
     }
 
+    log_string := New(Log_String,, per_thread.allocator);
     message_in_the_pool := copy_string(message,, per_thread.allocator);
-
-    log_string: Log_String;
     log_string.message = message_in_the_pool;
+    log_string.thread_index = tid;
     log_string.info = info;
     log_string.data = data;
-    // put mutex around it?
-    array_add(*per_thread.log_strings, log_string);
-    // unlock the array
 
+    atomic_swap(*per_thread.write_offset, per_thread.pool.current_point);
     wake(*conditional);
 }
 
@@ -114,16 +112,14 @@ handle_logging :: (thread: *Thread) -> s64 {
     has_work_to_do := false;
     while true {
         // We check if there's work to do
-
         for * pt, pti: looger_global.per_thread {
-
-            if pt.log_strings && pt.log_strings.count > pt.last_seen_log {
+            if pt.write_offset > pt.read_offset {
                 has_work_to_do = true;
                 break;
             }
         }
 
-        // But then here, after we checked, but before we went to sleep,
+        // RACE: after we checked, but before we went to sleep,
         // thread added work and called wake. Since we're not waiting just yet,
         // wake is wasted, and we then wait instead of consuming the work.
         if !has_work_to_do {
@@ -133,15 +129,22 @@ handle_logging :: (thread: *Thread) -> s64 {
         }
 
         for * pt, pti: looger_global.per_thread {
-            log_strings := array_view(pt.log_strings, pt.last_seen_log);
-            for log_strings {
-                write_log(it);
-                atomic_increment(*pt.last_seen_log);
+            while pt.write_offset > pt.read_offset {
+                log_string := pt.read_offset.(*Log_String);
+                write_log(log_string);
+                atomic_swap(*pt.read_offset, next_read_offset(pt, log_string));
             }
         }
     }
 
     return 0;
+}
+
+
+// Flat_Pool is 2-aligned, so we need to bump it up a bit to get the next Log_String
+next_read_offset :: inline (pt: Looger_Per_Thread, log_string: Log_String) -> *u8 {
+    result := FP.Align(pt.read_offset + size_of(Log_String) + log_string.message.count, pt.pool.alignment);
+    return result;
 }
 
 
@@ -151,6 +154,16 @@ write_log :: (using log_string: Log_String) {
     calendar_utc := to_calendar(now, .UTC);
     date_s := calendar_to_string(calendar_utc);
     formatted_message: string;
+
+    defer {
+        // TODO: Probably don't use temp storage for the logging thread at all,
+        // instead just use a static array or a small flat pool to do string formatting;
+        ts_occupied := context.temporary_storage.total_bytes_occupied;
+        if ts_occupied > 4000 {
+            reset_temporary_storage();
+        }
+    }
+
     if message[message.count - 1] != #char "\n" {
         formatted_message = tprint("%: %\n", date_s, message);
     } else {
@@ -162,7 +175,11 @@ write_log :: (using log_string: Log_String) {
         return;
     }
     if also_log_to_stdout {
-        runtime_support_default_logger(message, data, info);
+        #if DEBUG {
+            runtime_support_default_logger(tprint("[%] - %", log_string.thread_index, message), data, info);
+        } else {
+            runtime_support_default_logger(message, data, info);
+        }
     }
 
     // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
@@ -207,6 +224,12 @@ write_log :: (using log_string: Log_String) {
         return;
     }
 }
+
+
+log_warning :: (format_string: string, args: .. Any, loc := #caller_location, flags := Log_Flags.NONE, user_flags : u32 = 0, section : *Log_Section = null) {
+    new_flags := flags | .WARNING;
+    log(format_string, ..args, loc, new_flags, user_flags, section);
+} @PrintLike
 
 
 // When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
@@ -295,7 +318,7 @@ spin :: () {
 #import "Basic";
 #import "Thread";
 #import "File";
-#import "Flat_Pool";
+using FP :: #import "Flat_Pool";
 #import "String";
 
 #if OS == .LINUX {
