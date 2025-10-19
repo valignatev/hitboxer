@@ -30,6 +30,7 @@ last_time: float64;
 scroll_value_profiles_region: float;
 scroll_value_mappings_region: float;
 scroll_value_new_profile: float;
+scroll_value_log_region: float;
 
 the_window: *Window;
 
@@ -44,6 +45,7 @@ subwindow_info_new_profile: Subwindow_Info;
 subwindow_new_profile_just_got_closed := false;
 searchbar_should_be_active := true;
 subwindow_info_presets_confirmation: Subwindow_Info;
+subwindow_log: Subwindow_Info;
 default_button_height := 50.0;
 default_padding := 10.0;
 
@@ -284,12 +286,26 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
+// TODO: make it into a proper sliding arena
+// OR - use ring buffer like in Looger and then soft for display
+display_log: [..]string;
+
+looger_callback :: (message: string, info: Log_Info) {
+    array_add(*display_log, copy_string(message));
+
+    if subwindow_log.open {
+        platform_wake_up_main_thread();
+    }
+}
+
+
 init_logging :: (log_file_path: string) {
     success := init_looger(
         num_threads=5,
         log_file_path=log_file_path,
         max_log_file_size=1000_000,
         also_log_to_stdout=DEBUG,
+        callback=looger_callback,
     );
     if !success {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
@@ -624,6 +640,13 @@ main :: () {
         active_search=*dummy_input_text_state,
         need_to_rerender=true,
     };
+
+    subwindow_info_new_profile.open = false;
+    subwindow_info_presets_confirmation.open = false;
+    // We need to set this one to false very early, because logger checks for subwindow_log.open
+    // And for consistency we set others also here so all subwindow config is together.
+    subwindow_log.open = false;
+
     using current_program_state;
 
     log_file_path, config_path := platform_get_logging_and_config_file_paths();
@@ -688,9 +711,6 @@ main :: () {
     init_fonts(the_window);
     ui_init("", *gd_draw_procs);
 
-    subwindow_info_new_profile.open = false;
-    subwindow_info_presets_confirmation.open = false;
-
     if close_to_tray platform_hide_to_tray(the_window);
     quit := false;
     while !quit {
@@ -702,7 +722,6 @@ main :: () {
 
         if !need_to_rerender {
             need_to_rerender = platform_wait_for_message();
-            // need_to_rerender = true;
         }
 
         JDL.update_window_events();
@@ -924,23 +943,6 @@ draw_one_frame :: (dt: float, window: *Window) {
 
             next_y = r.y + r.h;
         }
-
-#if DEBUG {
-        // Debug view to see if we're rerendering.
-        {
-            pulse_rect := get_rect(padding, next_y + padding, 100, button_height);
-            theme := pulsating_button_theme;
-            _, state, _ := button(pulse_rect, "", *theme);
-
-            // Updating production value 3 times a frame so that it pulsates really fast!
-            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
-
-            next_y = pulse_rect.y + pulse_rect.h;
-        }
-}
-
     }
 
     // Scuffed separator
@@ -996,12 +998,24 @@ draw_one_frame :: (dt: float, window: *Window) {
     // EMERGENCY QUIT BUTTON. TODO: only enable it in debug mode
     //
     #if DEBUG {
-        close_start := right_side_rect.w + right_side_rect.x + 10;
-        close_rect := get_rect(close_start, 10, button_height, button_height);
+        start := right_side_rect.w + right_side_rect.x + 10;
+        close_rect := get_rect(start, 10, button_height, button_height);
         _, _, close_released := our_button(close_rect, "X", *my_theme.button_theme);
 
         if close_released {
             exit(1);
+        }
+
+        // Debug view to see if we're rerendering.
+        {
+            pulse_rect := get_rect(start, 10 + button_height + 10, button_height, button_height);
+            theme := pulsating_button_theme;
+            _, state, _ := button(pulse_rect, "", *theme);
+
+            // Updating production value 3 times a frame so that it pulsates really fast!
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
+            update_production_value_button(pulse_rect, false, state, .OVER, *theme);
         }
     }
 
@@ -1183,9 +1197,24 @@ draw_one_frame :: (dt: float, window: *Window) {
         next_y = r.y + r.h;
     }
 
-    //
-    // New Profile subwindow
-    //
+    // Log window
+    {
+        log_button_theme := my_theme.button_theme;
+        log_button_theme.surface_color = Vector4.{.86, .26, .11, .40};
+        log_button_theme.surface_color_over = Vector4.{.86, .165, .105, .57};
+        log_x := 0;
+        log_y := window_height - button_height;
+        log_width := window_width;
+        log_height := button_height;
+        r := get_rect(xx log_x, log_y, xx log_width, xx log_height);
+        _, _, released := our_button(r, "LOG SITUATION IS CRAZY", theme=*log_button_theme);
+
+        if released {
+            subwindow_log.open = true;
+        }
+    }
+
+    // Subwindows
     {
         theme := my_theme.subwindow_theme;
         if !subwindows_initted {
@@ -1198,6 +1227,11 @@ draw_one_frame :: (dt: float, window: *Window) {
             subwindow_info_presets_confirmation.rect = presets_confirm_rect;
             subwindow_info_presets_confirmation.title_text = "Confirm";
             subwindow_info_presets_confirmation.draw = draw_presets_confirmation;
+
+            log_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2);
+            subwindow_log.rect = log_window_rect;
+            subwindow_log.title_text = "Logs";
+            subwindow_log.draw = draw_log_window;
 
             subwindows_initted = true;
         }
@@ -1217,6 +1251,10 @@ draw_one_frame :: (dt: float, window: *Window) {
 
         if subwindow_info_presets_confirmation.open {
             add_subwindow(*subwindow_info_presets_confirmation, *theme);
+        }
+
+        if subwindow_log.open {
+            add_subwindow(*subwindow_log, *theme);
         }
     }
 
@@ -1337,6 +1375,33 @@ draw_presets_confirmation :: (state: *Subwindow_State, base_r: Rect, data: *void
         subwindow_info_presets_confirmation.open = false;
     }
 
+}
+
+
+draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
+    using current_program_state;
+
+    region, inside := begin_scrollable_region(base_r, *my_theme.scrollable_region_theme);
+
+    s := inside;
+    s.h = default_button_height;
+    s.y -= scroll_value_log_region;
+
+    for display_log {
+        _, _, released := our_button(s, it, identifier=it_index);
+        if released {
+            // Do nothing for now
+        }
+
+        if it_index != display_log.count  {
+            s.y += floor(default_button_height * 1.1 + 0.5);  // Just so r.y is in the right place for end_scrollable_region().
+        }
+        // TODO: automatically scroll the log unless scroll bar is in action, or if a user manually
+        // scrolling the log.
+        // scroll_scrollable_region(region, s.y, *scroll_value_log_region);
+    }
+
+    end_scrollable_region(region, s.x + s.w, s.y + s.h, *scroll_value_log_region);
 }
 
 scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scroll_value: *float) {

@@ -1,8 +1,11 @@
 #module_parameters(DEBUG := false);
 
+Looger_Callback :: #type (message: string, info: Log_Info);
+
 Looger :: struct {
     initted: bool;
     thread: Thread;
+    callback: Looger_Callback;
     max_log_file_size := 1000_000;
     log_file: File;
     log_file_path: string;
@@ -34,11 +37,12 @@ Log_String :: struct {
 }
 
 
-init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32, also_log_to_stdout: bool = false) -> success: bool {
+init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32, also_log_to_stdout: bool = false, callback: Looger_Callback = null) -> success: bool {
     looger_global.per_thread = NewArray(num_threads, Looger_Per_Thread);
     looger_global.log_file_path = log_file_path;
     looger_global.also_log_to_stdout = also_log_to_stdout;
     looger_global.max_log_file_size = max_log_file_size;
+    looger_global.callback = callback;
 
     for * looger_global.per_thread {
         it.pool.alignment = 8;
@@ -178,6 +182,10 @@ write_log :: (using log_string: Log_String) {
         } else {
             runtime_support_default_logger(message, data, info);
         }
+    }
+
+    if callback {
+        callback(message, info);
     }
 
     // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.

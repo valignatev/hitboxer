@@ -1290,7 +1290,17 @@ platform_deinit :: (window: Window_Type) {
 }
 
 platform_wake_up_main_thread :: () {
-    //
+    window := the_window.xcb.handle;
+    event: xcb_client_message_event_t;
+    event.response_type = XCB_CLIENT_MESSAGE;
+    event.format = 32;
+    event.window = window;
+    event.type = xx xcb_atom_enum_t.XCB_ATOM_NONE;
+
+    con := JDL.main_display.xcb.handle;
+
+    xcb_send_event(con, 0, window, xx xcb_event_mask_t.XCB_EVENT_MASK_NO_EVENT, xx *event);
+    xcb_flush(con);
 }
 
 platform_wait_for_message :: inline () -> need_to_rerender: bool {
