@@ -305,15 +305,12 @@ looger_callback :: (log_string: Log_String) {
     }
 
     message := trim(log_string.message);
-    print("CALLBACK: %\n", message);
     internal := log_string;
     mem := get(*log_pool, 100);
     memcpy(mem, message.data, min(message.count, 100));
 
     internal.message.count = message.count;
     internal.message.data = mem;
-
-    print("CALLBACK 2: %\n", internal);
 
     display_log[index] = internal;
     display_slot += 1;
@@ -1430,14 +1427,6 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
         (a, b) => compare_apollo_times(a.timestamp, b.timestamp),
     );
 
-    for display_log {
-        if !it.message {
-            continue;
-        }
-
-        print("DISPLAY 1: %\n", it.message);
-    }
-
     for sorted {
         if !it.message {
             continue;
@@ -1447,8 +1436,6 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
         if it.info.common_flags & .ERROR {
             theme = error_theme;
         }
-
-        print("DISPLAY 2: %\n", it.message);
 
         _, _, released := our_button(s, it.message, identifier=it_index, theme=*theme);
         if released {
