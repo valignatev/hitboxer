@@ -286,12 +286,37 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
-// TODO: make it into a proper sliding arena
-// OR - use ring buffer like in Looger and then soft for display
-display_log: [..]string;
+display_log: [50]Log_String;
+display_slot := 0;
+log_pool: Flat_Pool;
 
-looger_callback :: (message: string, info: Log_Info) {
-    array_add(*display_log, copy_string(message));
+looger_callback :: (log_string: Log_String) {
+    if !(log_string.info.common_flags & (.ERROR | .WARNING)) return;
+
+    index := display_slot % display_log.count;
+
+    // "soft"-resetting the pool so that we can start allocating
+    // strings from the start, but keeping all of the memory valid.
+    // This is fine, because we hardcode all of the strings to be 100 bytes max.
+    // So even though we could have log strings that are cut, we will never step onto
+    // a string that is ahead of us.
+    if index == 0 {
+        log_pool.current_point = log_pool.memory_base;
+    }
+
+    message := trim(log_string.message);
+    print("CALLBACK: %\n", message);
+    internal := log_string;
+    mem := get(*log_pool, 100);
+    memcpy(mem, message.data, min(message.count, 100));
+
+    internal.message.count = message.count;
+    internal.message.data = mem;
+
+    print("CALLBACK 2: %\n", internal);
+
+    display_log[index] = internal;
+    display_slot += 1;
 
     if subwindow_log.open {
         platform_wake_up_main_thread();
@@ -310,6 +335,11 @@ init_logging :: (log_file_path: string) {
     if !success {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
+
+    // Init our own display log pool
+    log_pool.alignment = 8;
+    // 10k forward aligned
+    init(*log_pool, reserve=12288);
 
     looger_global.thread.starting_context.logger = looger;
     thread_init(*looger_global.thread, handle_logging);
@@ -1200,8 +1230,8 @@ draw_one_frame :: (dt: float, window: *Window) {
     // Log window
     {
         log_button_theme := my_theme.button_theme;
-        log_button_theme.surface_color = Vector4.{.86, .26, .11, .40};
-        log_button_theme.surface_color_over = Vector4.{.86, .165, .105, .57};
+        log_button_theme.surface_color = error_color;
+        log_button_theme.surface_color_over = error_color_over;
         log_x := 0;
         log_y := window_height - button_height;
         log_width := window_width;
@@ -1381,14 +1411,46 @@ draw_presets_confirmation :: (state: *Subwindow_State, base_r: Rect, data: *void
 draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     using current_program_state;
 
+    error_theme := my_theme.button_theme;
+    error_theme.surface_color = error_color;
+    error_theme.surface_color_over = error_color_over;
+
     region, inside := begin_scrollable_region(base_r, *my_theme.scrollable_region_theme);
 
     s := inside;
     s.h = default_button_height;
     s.y -= scroll_value_log_region;
 
+    // memcopying a static array because the original one gets populated by another thread,
+    // and I don't want to sort it in that thread.
+    // TODO: Is there a possibility to get a torn Log_String here somehow?
+    display_log_for_sorting := display_log;
+    sorted := Sort.quick_sort(
+        display_log_for_sorting,
+        (a, b) => compare_apollo_times(a.timestamp, b.timestamp),
+    );
+
     for display_log {
-        _, _, released := our_button(s, it, identifier=it_index);
+        if !it.message {
+            continue;
+        }
+
+        print("DISPLAY 1: %\n", it.message);
+    }
+
+    for sorted {
+        if !it.message {
+            continue;
+        }
+
+        theme := my_theme.button_theme;
+        if it.info.common_flags & .ERROR {
+            theme = error_theme;
+        }
+
+        print("DISPLAY 2: %\n", it.message);
+
+        _, _, released := our_button(s, it.message, identifier=it_index, theme=*theme);
         if released {
             // Do nothing for now
         }
@@ -1471,6 +1533,10 @@ small_label_font: *UI_Font;
 button_font: *UI_Font;
 header_font: *UI_Font;
 
+
+error_color := Vector4.{.86, .26, .11, .40};
+error_color_over := Vector4.{.86, .165, .105, .57};
+
 working_directory_set := false;
 mapping_resolving_hook_is_installed := false;
 mapping_setting_hook_is_installed := false;
@@ -1482,6 +1548,7 @@ GetRect_Type_Indicator :: struct {
     Texture :: Simp.Texture;
 }
 
+
 #import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
 #import "Hash_Table";
 Input :: #import "Input";
@@ -1489,11 +1556,13 @@ Simp :: #import "Simp";
 #import "JDL";
 using GetRect :: #import "GetRect_LeftHanded"()(Type_Indicator = GetRect_Type_Indicator);
 #import "Math";
-#import "String";
 System :: #import "System";
 tfh :: #import "Text_File_Handler";
 #import "Reflection";
 #import "File";
 #import "File_Utilities";
+#import "Flat_Pool";
 #import "Control_Flow";
 #import "Looger"(DEBUG=DEBUG);
+Sort :: #import "Sort";
+#import "String";

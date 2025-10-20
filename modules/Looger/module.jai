@@ -1,6 +1,6 @@
 #module_parameters(DEBUG := false);
 
-Looger_Callback :: #type (message: string, info: Log_Info);
+Looger_Callback :: #type (log_string: Log_String);
 
 Looger :: struct {
     initted: bool;
@@ -30,6 +30,7 @@ Looger_Per_Thread :: struct {
 
 
 Log_String :: struct {
+    timestamp: Apollo_Time;
     message: string;
     thread_index: u32;
     info: Log_Info;
@@ -99,6 +100,7 @@ looger :: (message: string, data: *void, info: Log_Info) {
 
     log_string := New(Log_String,, per_thread.allocator);
     message_in_the_pool := copy_string(message,, per_thread.allocator);
+    log_string.timestamp = current_time_consensus();
     log_string.message = message_in_the_pool;
     log_string.thread_index = tid;
     log_string.info = info;
@@ -152,9 +154,9 @@ next_read_offset :: inline (pt: Looger_Per_Thread, log_string: Log_String) -> *u
 
 write_log :: (using log_string: Log_String) {
     using looger_global;
-    now := current_time_consensus();
-    calendar_utc := to_calendar(now, .UTC);
+    calendar_utc := to_calendar(timestamp, .UTC);
     date_s := calendar_to_string(calendar_utc);
+
     formatted_message: string;
 
     defer {
@@ -164,6 +166,10 @@ write_log :: (using log_string: Log_String) {
         if ts_occupied > 4000 {
             reset_temporary_storage();
         }
+    }
+
+    if callback {
+        callback(log_string);
     }
 
     if message[message.count - 1] != #char "\n" {
@@ -182,10 +188,6 @@ write_log :: (using log_string: Log_String) {
         } else {
             runtime_support_default_logger(message, data, info);
         }
-    }
-
-    if callback {
-        callback(message, info);
     }
 
     // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.

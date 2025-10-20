@@ -245,7 +245,7 @@ get_x11_window_name :: (window: u32) -> string {
     // to a Wayland-native application. So I let it be...
     if !name_reply && !name_old_reply {
         if name_error {
-            log_warning(
+            log_error(
                 "Error getting _NET_WM_NAME for window %: error code %",
                 window,
                 name_error.error_code,
@@ -931,7 +931,7 @@ handle_timers :: (thread: *Thread) -> s64 {
                 //  like, change grab_timer_test_passed to a three-way enum.
                 log_error(S(
                     "Our input handler did not pass a healthcheck and likely hardlocked ",
-                    "you for few seconds, so we recovered from this disaster.\n",
+                    "you for few seconds, so we recovered from this disaster. ",
                     "Please submit an issue to Github with relevant log.txt parts attached. ",
                     "Sorry for the inconvenience!\n",
                 ));
