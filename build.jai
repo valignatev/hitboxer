@@ -7,6 +7,7 @@ build :: () {
     optimized := false;
 
     target_options := get_build_options(w);
+    target_options.backend = .X64;
     target_options.output_executable_name = "hitboxer";
     target_options.arithmetic_overflow_check = .FATAL;
     target_options.dead_code_elimination = .NONE;
@@ -21,6 +22,7 @@ build :: () {
         if arg == {
             case "release";
             optimized = true;
+            target_options.backend = .LLVM;
             set_optimization(*target_options, .VERY_OPTIMIZED);
             // Why is MODULES_ONLY the default?
             target_options.dead_code_elimination = .ALL;
