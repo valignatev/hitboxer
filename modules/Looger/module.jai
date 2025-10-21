@@ -240,6 +240,12 @@ log_warning :: (format_string: string, args: .. Any, loc := #caller_location, fl
 } @PrintLike
 
 
+log_debug :: (format_string: string, args: .. Any, loc := #caller_location, flags := Log_Flags.NONE, user_flags : u32 = 0, section : *Log_Section = null) {
+    new_flags := flags | .VERBOSE_ONLY;
+    log(format_string, ..args, loc, new_flags, user_flags, section);
+} @PrintLike
+
+
 // When log file exceeds max_log_file_size, we only leave 10% from the tail of the old log file and
 // delete everything else from the beginning;
 rotate_log_file :: (data: *void, info: Log_Info) {

@@ -185,12 +185,14 @@ detect_focused_program :: (thread: *Thread) -> error_code: s64 {
                 focused_window := input_focus_reply.focus;
 
                 name := get_x11_window_name(focused_window);
-                log("Name: %\n", name);
+                log_debug("Window focused: %\n", name);
                 xcb_flush(con);
                 // TODO: Better way to handle the title name, contains is probably not very
                 // robust. Also it's case-sensitive for now :(
                 hook_is_set_by_profile := false;
                 for profile: profiles {
+                    if !name break;
+
                     if contains(profile.program, name) {
                         active_profile = *profile;
                         set_mapping_resolving_hook();
@@ -244,17 +246,20 @@ get_x11_window_name :: (window: u32) -> string {
     // On Sway, I get no reply when the X11 window loses focus and it switches
     // to a Wayland-native application. So I let it be...
     if !name_reply && !name_old_reply {
-        if name_error {
-            log_error(
-                "Error getting _NET_WM_NAME for window %: error code %",
+        // We don't care about error code 3 (BadWindow), because if a window gets destroyed as we're
+        // trying to acquire its name - oh well, we're not gonna enable any sort of input handling for
+        // it anyway.
+        if name_error && name_error.error_code != 3 {
+            log_warning(
+                "Can't get _NET_WM_NAME for window %: error code %",
                 window,
                 name_error.error_code,
             );
             c_free(name_error);
         }
-        if name_old_error {
+        if name_old_error && name_old_error.error_code != 3 {
             log_warning(
-                "Error getting WM_NAME for window %: error code %",
+                "Can't get WM_NAME for window %: error code %",
                 window,
                 name_old_error.error_code,
             );
