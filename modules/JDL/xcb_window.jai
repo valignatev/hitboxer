@@ -59,6 +59,8 @@ XCB_Display :: struct {
 
         outgoing_data: string;   // from us to the outside
     }
+
+    cursors: Table(string, xcb_cursor_t);
 }
 
 
@@ -218,7 +220,34 @@ xcb_init_display :: (display: *Display) -> bool {
         }
     }
 
+    // xcb_cursor
+    if xcb_cursor_loaded {
+        success := load_cursors(*d);
+        if !success {
+            log_error("X11 was unable to preload cursors from theme\n");
+        }
+    }
+
     display.xcb = d;
+    return true;
+}
+
+
+load_cursors :: (display: *XCB_Display) -> bool {
+    ctx: *xcb_cursor_context_t;
+    if xcb_cursor.context_new(display.handle, display.screen, *ctx) < 0 return false;
+    defer xcb_cursor.context_free(ctx);
+
+    preloaded_x_cursors :: string.[
+        "default", "pointer", "not-allowed", "col-resize", "row-resize",
+        "all-scroll", "nw-resize", "se-resize", "text",
+    ];
+
+    for preloaded_x_cursors {
+        name := temp_c_string(it);
+        table_set(*display.cursors, it, xcb_cursor.load_cursor(ctx, name));
+    }
+
     return true;
 }
 
@@ -244,6 +273,7 @@ create_window :: (
     window_ret.base.set_window_title = xcb_set_window_title;
     window_ret.base.has_native_handle = xcb_has_native_handle;
     window_ret.base.finalize_present = xcb_finalize_present;
+    window_ret.base.set_cursor = xcb_set_cursor;
 
     to_u16 :: (f: float) -> u16 #expand {
         u := clamp(cast(s32)(f * 65535), 0, 65535);
@@ -412,16 +442,6 @@ xcb_wait_for_events :: (display: *Display) {
             }
             return;
         }
-
-        // if pfd[2].revents & POLLIN {
-        //     consume_loop_wakeup_event(display);
-        //     break;
-        // }
-
-        // if pfd[1].revents & POLLIN {
-        //     timers_tick();
-        //     break;
-        // }
 
         if pfd[0].revents & POLLIN {
             assert(d.pending_event == null);
@@ -821,6 +841,19 @@ xcb_finalize_present :: (window: *Window) {
     win.sync.resize_id.lo = 0;
     win.sync.resize_id.hi = 0;
     win.sync.resize_in_progress = false;
+}
+
+xcb_set_cursor :: (window: *Window, cursor: string) {
+    // TODO: error check
+    // xcb_check_usage(null, window);
+    win : *XCB_Window = window;
+    display := win.base.display.xcb;
+    found, cursor := table_find(*display.cursors, cursor);
+    if found {
+        attrs: xcb_change_window_attributes_value_list_t;
+        attrs.cursor = cursor;
+        xcb_change_window_attributes_aux(display.handle, win.handle, .CURSOR, *attrs);
+    }
 }
 
 xcb_clipboard_get_text :: (display: *Display) -> string {

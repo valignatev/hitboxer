@@ -79,6 +79,7 @@ Base_Window :: struct {
 
     set_window_title: #type (window: *Window, title: string);
     finalize_present: #type (window: *Window);
+    set_cursor: #type (window: *Window, cursor: string);
 }
 
 
@@ -207,6 +208,13 @@ finalize_present :: inline (window: *Window) {
 }
 
 
+// Cursors
+set_cursor :: inline (window: *Window, cursor: string) {
+    bw: *Base_Window = window;
+    bw.set_cursor(window, cursor);
+}
+
+
 Window_Type :: *Window;
 INVALID_WINDOW : Window_Type : null;
 
@@ -223,6 +231,7 @@ clipboard_set_text :: (text: string) {
 clipboard_set_bitmap :: (width: s32, height: s32, pixels: *u8, channels: s32, flip := false) {
     // Not implemented
 }
+
 
 #scope_file
 _main_display: Display;

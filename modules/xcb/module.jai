@@ -3,6 +3,7 @@
 #load "./xcb_fp.jai";
 #load "./xcb_xkb.jai";
 #load "./xcb_sync.jai";
+#load "./xcb_cursor.jai";
 
 using xcb_symbols: XCB_Symbols;
 xcb_loaded := false;
@@ -12,6 +13,10 @@ xcb_xkb_loaded := false;
 
 xcb_sync: XCB_Sync_Symbols;
 xcb_sync_loaded := false;
+
+xcb_cursor: XCB_Cursor_Symbols;
+xcb_cursor_loaded := false;
+
 
 load_xcb :: () -> bool {
     if !load_procs(
@@ -36,6 +41,14 @@ load_xcb :: () -> bool {
         .["libxcb-sync.so.1", "libxcb-sync.so" ],
         *xcb_sync_loaded,
         "xcb_sync",
+    );
+
+    // xcb-cursor is optional, so we don't care if it fails.
+    load_procs(
+        *xcb_cursor,
+        .["libxcb-cursor.so", "libxcb-cursor.so.0", "libxcb-cursor.so.0.0.0"],
+        *xcb_cursor_loaded,
+        "xcb_cursor",
     );
 
     return true;

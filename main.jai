@@ -712,6 +712,7 @@ main :: () {
         immediate_triangle         = Simp.immediate_triangle,
         immediate_quad             = #procedure_of_call Simp.immediate_quad(p, p, p, p, c),
         immediate_flush            = Simp.immediate_flush,
+        set_pointer_image          = our_set_pointer_image,
     };
 
     the_window = create_window(window_width, window_height, "Hitboxer v0.13", window_class="hitboxer");
