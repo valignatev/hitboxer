@@ -35,16 +35,25 @@ get_dpi_scale :: (window: Window_Type) -> float {
 }
 
 
+create_virtual_device_error_handler :: () {
+    #import "Process";
+    run_command("xdg-open", "66-hitboxer-input.rules");
+}
+
+
 // TODO: only supports keyboards for now, support other device types when it is time
 create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[]) -> success: bool, fd: s32 {
-    fd := open("/dev/uinput", O_RDWR | O_NONBLOCK);
+    fd := open("/dev/uinputsdkljfdsklfj", O_RDWR | O_NONBLOCK);
 
     if fd < 0 {
         code, s := System.get_error_value_and_string();
         // TODO: better error - hint the user at which exactly they need to configure in udev
-        error_string := tprint("Could not open \"/dev/uinput\" for creating a virtual device %, error: %\n", name, s);
+        error_string := tprint("Could not open \"/dev/uinput\" for creating %, error: %\n", name, s);
         error_string = tprint("% Reopen the program with root privileges, or configure required udev rules\n", error_string);
+        old_logger_data := context.logger_data;
+        context.logger_data = xx create_virtual_device_error_handler;
         log_error("%", error_string);
+        context.logger_data = old_logger_data;
         return false, -1;
     }
 

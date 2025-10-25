@@ -321,6 +321,8 @@ looger_callback :: (log_string: Log_String) {
 }
 
 
+log_error_handler :: #type ();
+
 init_logging :: (log_file_path: string) {
     success := init_looger(
         num_threads=5,
@@ -1281,7 +1283,7 @@ draw_one_frame :: (dt: float, window: *Window) {
         }
 
         if subwindow_log.open {
-            add_subwindow(*subwindow_log, *theme);
+            subwindow_state := add_subwindow(*subwindow_log, *theme);
         }
     }
 
@@ -1290,7 +1292,7 @@ draw_one_frame :: (dt: float, window: *Window) {
     //     need_to_scroll_mappings_region = false;
     // }
 
-    draw_popups();
+    our_draw_popups();
     Simp.swap_buffers(window);
 
     if index_to_remove >= 0 {
@@ -1409,6 +1411,7 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     using current_program_state;
 
     error_theme := my_theme.button_theme;
+    error_theme.font = log_font;
     error_theme.surface_color = error_color;
     error_theme.surface_color_over = error_color_over;
 
@@ -1439,8 +1442,12 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
 
         _, _, released := our_button(s, it.message, identifier=it_index, theme=*theme);
         if released {
-            // Do nothing for now
+            handler := it.data.(log_error_handler);
+            if handler handler();
         }
+
+        // if draw_log_details {
+        // }
 
         if it_index != display_log.count  {
             s.y += floor(default_button_height * 1.1 + 0.5);  // Just so r.y is in the right place for end_scrollable_region().
@@ -1489,13 +1496,15 @@ init_fonts :: (window: Window_Type) {
 
     dpi := get_dpi_scale(window);
 
-    // Window height was here
     pixel_height := 600 / dpi / 26;
     header_height := 600 / dpi / 20;
     small_height := 600 / dpi / 36;
-    button_font = Simp.get_font_at_size(hack_regular.([]u8), cast(s64)(pixel_height * dpi));
-    small_label_font = Simp.get_font_at_size(hack_regular.([]u8), cast(s64)(small_height * dpi));
-    header_font = Simp.get_font_at_size(hack_bold.([]u8), cast(s64)(header_height * dpi));
+    log_height := 600 / dpi / 30;
+    button_font = Simp.get_font_at_size(hack_regular.([]u8), (pixel_height * dpi).(s64));
+    small_label_font = Simp.get_font_at_size(hack_regular.([]u8), (small_height * dpi).(s64));
+    log_font = Simp.get_font_at_size(hack_regular.([]u8), (log_height * dpi).(s64));
+
+    header_font = Simp.get_font_at_size(hack_bold.([]u8), (header_height * dpi).(s64));
     assert(button_font != null);
 }
 
@@ -1517,6 +1526,7 @@ array_ordered_remove_by_pointer :: (array_pointer: *[]$T, item: *T) {
 UI_Font :: Simp.Dynamic_Font;
 
 small_label_font: *UI_Font;
+log_font: *UI_Font;
 button_font: *UI_Font;
 header_font: *UI_Font;
 
