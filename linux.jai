@@ -35,9 +35,14 @@ get_dpi_scale :: (window: Window_Type) -> float {
 }
 
 
-create_virtual_device_error_handler :: () {
+open_uinput_rules :: () {
     #import "Process";
     run_command("xdg-open", "66-hitboxer-input.rules");
+}
+
+
+create_virtual_device_error_handler :: () {
+    add_work(*thread_group, xx open_uinput_rules);
 }
 
 
@@ -927,6 +932,10 @@ handle_timers :: (thread: *Thread) -> s64 {
     while true {
         poll(pfd.data, xx pfd.count, -1);
 
+        // Temporarily put thread_group stuff under the grab timers which runs every 5 seconds.
+        // Probably, thread_group timer could be its own.
+        results := get_completed_work(*thread_group);
+
         if pfd[0].revents & POLLIN {
             // Handle Ungrabs in case our input handler gets stuck or something else
             value: s64;
@@ -957,6 +966,7 @@ handle_timers :: (thread: *Thread) -> s64 {
                 }
             }
         }
+        reset_temporary_storage();
     }
     return 0;
 }
@@ -1333,7 +1343,6 @@ using JDL :: #import "JDL";
 #import "xcb";
 #import "libxkbcommon";
 #import "Input";
-#import "Thread";
 #import "Helpers";
 #import "libinput"(LOAD_AT_RUNTIME=true, LOAD_LIBUDEV_AT_RUNTIME=true);
 #import "libudev"(LOAD_AT_RUNTIME=true);

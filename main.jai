@@ -49,6 +49,10 @@ subwindow_log: Subwindow_Info;
 default_button_height := 50.0;
 default_padding := 10.0;
 
+
+thread_group: Thread_Group;
+
+
 Mapping_State :: enum {
     NOTHING :: 0;
     SETTING_SOURCE :: 1;
@@ -325,7 +329,7 @@ log_error_handler :: #type ();
 
 init_logging :: (log_file_path: string) {
     success := init_looger(
-        num_threads=5,
+        num_threads=6,
         log_file_path=log_file_path,
         max_log_file_size=1000_000,
         also_log_to_stdout=DEBUG,
@@ -334,6 +338,7 @@ init_logging :: (log_file_path: string) {
     if !success {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
+    context.logger = looger;
 
     // Init our own display log pool
     log_pool.alignment = 8;
@@ -343,6 +348,21 @@ init_logging :: (log_file_path: string) {
     looger_global.thread.starting_context.logger = looger;
     thread_init(*looger_global.thread, handle_logging);
     thread_start(*looger_global.thread);
+}
+
+
+thread_group_proc :: (group: *Thread_Group, thread: *Thread, work: *void) -> Thread_Continue_Status {
+    handler := work.(log_error_handler);
+    if handler handler();
+
+    return .CONTINUE;
+}
+
+
+// For now, this is just one thread that executes log error handlers.
+init_thread_group :: () {
+    init(*thread_group, 1, thread_group_proc);
+    start(*thread_group);
 }
 
 
@@ -680,8 +700,6 @@ main :: () {
 
     log_file_path, config_path := platform_get_logging_and_config_file_paths();
     init_logging(log_file_path);
-    // TODO: temp
-    context.logger = looger;
 
     success_init, init_reason := platform_init();
     if !success_init {
@@ -724,6 +742,8 @@ main :: () {
         log_error("Post window creation initialization failed\n");
         exit(1);
     }
+
+    init_thread_group();
 
     // @note: Parsed settings are baked by the memory from raw_settings. So I just don't free it
     // to avoid corruptions. A bit of a silly optimizations, but why not lmao.
@@ -1563,3 +1583,4 @@ tfh :: #import "Text_File_Handler";
 #import "Looger"(DEBUG=DEBUG);
 Sort :: #import "Sort";
 #import "String";
+#import "Thread";
