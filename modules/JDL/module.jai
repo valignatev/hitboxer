@@ -79,7 +79,7 @@ Base_Window :: struct {
 
     set_window_title: #type (window: *Window, title: string);
     finalize_present: #type (window: *Window);
-    set_cursor: #type (window: *Window, cursor: string);
+    set_cursor: #type (window: *Window, cursor: Cursor) -> success: bool;
 }
 
 
@@ -99,6 +99,25 @@ operator== :: (a: *Window, b: *Window) -> bool {
     assert(false, "Not implemented for a: % and b:%", a.base.type, b.base.type);
     return false;
 }
+
+
+// Based on Pointer_Image from GetRect
+Cursor :: enum u16 {
+    DEFAULT             :: 0;
+    PRESSABLE           :: 1;
+    LOCKED              :: 2;
+
+    DRAGGING_HORIZONTAL :: 3;
+    DRAGGING_VERTICAL   :: 4;
+    DRAGGING_FREE       :: 5;
+
+    DRAGGING_NW_SE      :: 6;
+    DRAGGING_NE_SW      :: 7;
+    TEXT_SELECT         :: 8;
+}
+
+
+NUM_CURSORS :: #run enum_highest_value(Cursor) + 1;
 
 
 JDL_init :: () -> success: bool {
@@ -209,9 +228,9 @@ finalize_present :: inline (window: *Window) {
 
 
 // Cursors
-set_cursor :: inline (window: *Window, cursor: string) {
-    bw: *Base_Window = window;
-    bw.set_cursor(window, cursor);
+set_cursor :: inline (window: *Window, cursor: Cursor) -> success: bool {
+    base_window: *Base_Window = window;
+    return base_window.set_cursor(window, cursor);
 }
 
 

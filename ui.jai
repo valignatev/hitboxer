@@ -547,9 +547,9 @@ draw_our_subwindow :: (state: *Subwindow_State) {
         close_button_pressed := false;
         inside_close_button  := false;
 
-        // resize_related_disable := pressed_flags || over_flags;  // :TitleBarOverride  If we changed the mouse pointer image because we are over a drag rect, we by no means want to press or even highlight the button, because we are telling the user that a mouse click will drag the subwindow!
+        resize_related_disable := pressed_flags || over_flags;  // :TitleBarOverride  If we changed the mouse pointer image because we are over a drag rect, we by no means want to press or even highlight the button, because we are telling the user that a mouse click will drag the subwindow!
         // @NOTE(valigo) - disable dragging subwindows entirely
-        resize_related_disable := true;
+        // resize_related_disable := true;
 
         c: Rect;  // For the close button.
         title_bar_text_rect := state.title_bar_rect;
@@ -683,31 +683,15 @@ our_draw_popups :: () {
     }
 }
 
-current_pointer_image: Pointer_Image;
+current_pointer_image: JDL.Cursor;
 our_set_pointer_image :: (image: Pointer_Image, widget: *GR.Active_Widget) {
     GR.pointer_image_was_set_this_frame = true;
-    if image == current_pointer_image return;
+    if image == xx current_pointer_image return;
 
-    if (image >= 0) && (image <= cast(Pointer_Image) NUM_POINTERS) {
-
-        current_pointer_image = image;
-
-        if current_pointer_image == {
-            case .NORMAL; JDL.set_cursor(the_window, "default");
-            case .PRESSABLE; JDL.set_cursor(the_window, "pointer");
-            case .LOCKED; JDL.set_cursor(the_window, "not-allowed");
-            case .DRAGGING_HORIZONTAL; JDL.set_cursor(the_window, "col-resize");
-            case .DRAGGING_VERTICAL; JDL.set_cursor(the_window, "row-resize");
-            case .DRAGGING_FREE; JDL.set_cursor(the_window, "all-scroll");
-            case .DRAGGING_NW_SE; JDL.set_cursor(the_window, "nw-resize");
-            case .DRAGGING_NE_SW; JDL.set_cursor(the_window, "se-resize");
-            // case .TEXT_SELECT; JDL.set_cursor(the_window, "text");
-        }
-
-        // GR.pointer_image_was_set_this_frame = true;
-        GR.already_reset_pointer_image = (image == .NORMAL);  // No need to reset the image if it was set to NORMAL.
-    } else {
-        log_error("Invalid pointer index %\n", image);
+    success := JDL.set_cursor(the_window, xx image);
+    if success {
+        current_pointer_image = xx image;
+        GR.already_reset_pointer_image = (image == .NORMAL);
     }
 }
 
@@ -715,7 +699,8 @@ our_set_pointer_image :: (image: Pointer_Image, widget: *GR.Active_Widget) {
 our_pointer_end_frame :: () {
     if !GR.pointer_image_was_set_this_frame {
         if !GR.already_reset_pointer_image {
-            our_set_pointer_image(.NORMAL, null); // This itself sets pointer_image* and already_reset*, so don't assume anything!
+            // This itself sets pointer_image* and already_reset*, so don't assume anything!
+            our_set_pointer_image(.NORMAL, null);
             GR.already_reset_pointer_image = true;
         }
     }
@@ -723,9 +708,6 @@ our_pointer_end_frame :: () {
     set_custom_cursor_handling(GR.pointer_image_was_set_this_frame);
     GR.pointer_image_was_set_this_frame = false;
 }
-
-
-NUM_POINTERS :: #run enum_highest_value(Pointer_Image) + 1;
 
 
 #scope_file

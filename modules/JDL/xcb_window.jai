@@ -60,7 +60,15 @@ XCB_Display :: struct {
         outgoing_data: string;   // from us to the outside
     }
 
-    cursors: Table(string, xcb_cursor_t);
+    // Indexed by Cursor enum
+    cursors: [NUM_CURSORS]xcb_cursor_t;;
+
+    // Volatile! Map cursor string to the Cursor enum.
+    // Maybe do enum array instead for better type safety
+    CURSOR_ENUM_MAP :: string.[
+        "default", "pointer", "not-allowed", "col-resize", "row-resize",
+        "all-scroll", "nw-resize", "se-resize", "text",
+    ];
 }
 
 
@@ -238,14 +246,9 @@ load_cursors :: (display: *XCB_Display) -> bool {
     if xcb_cursor.context_new(display.handle, display.screen, *ctx) < 0 return false;
     defer xcb_cursor.context_free(ctx);
 
-    preloaded_x_cursors :: string.[
-        "default", "pointer", "not-allowed", "col-resize", "row-resize",
-        "all-scroll", "nw-resize", "se-resize", "text",
-    ];
-
-    for preloaded_x_cursors {
+    for display.CURSOR_ENUM_MAP {
         name := temp_c_string(it);
-        table_set(*display.cursors, it, xcb_cursor.load_cursor(ctx, name));
+        display.cursors[it_index] = xcb_cursor.load_cursor(ctx, name);
     }
 
     return true;
@@ -410,49 +413,11 @@ xcb_set_window_title :: (window: *Window, title: string) {
 }
 
 
-// TODO: I think in xcb implementation we can straight up use xcb_wait_for_event
-// directly to block and wait, because under the hood it does pretty much the same -
-// polls on a socked with just some additional locking and ref-counting. So maybe all of this
-// can be removed.
-xcb_wait_for_events :: (display: *Display) {
+xcb_wait_for_events :: inline (display: *Display) {
     // xcb_check_usage(null, display);
 
     d : *XCB_Display = display;
-    while true {
-        pfd: [1]pollfd;
-        pfd[0].fd = d.file_descriptor;
-        pfd[0].events = POLLIN;
-        // pfd[1].fd = timers_epfd;
-        // pfd[1].events = POLLIN;
-        // pfd[2].fd = display.base.loop_wakeup_event;
-        // pfd[2].events = POLLIN;
-        result := poll(pfd.data, xx pfd.count, -1);
-
-        if result < 0 {
-            error := errno();
-            if error == EINTR continue;
-            if error == EINVAL {
-                log_error("Can't poll on xcb file descriptor. Max amount of opened file descriptors (RLIMIT_NOFILE) exceeded.");
-            } else if error == ENOMEM {
-                log_error("poll(2) failed with ENOMEM - it is unable to allocate memory for its internal use");
-            } else if error == EFAULT {
-                log_error("xcb poll is configured incorrectly - file descriptors are outside of the accessible address space");
-            } else {
-                log_error("Unknown error happened while waiting on xcb file descriptor. Error code: %", error);
-            }
-            return;
-        }
-
-        if pfd[0].revents & POLLIN {
-            assert(d.pending_event == null);
-            d.pending_event = xcb_poll_for_event(d.handle);
-            if !d.pending_event {
-                xcb_flush(d.handle);
-                continue;
-            }
-            break;
-        }
-    }
+    d.pending_event = xcb_wait_for_event(d.handle);
 }
 
 
@@ -843,17 +808,25 @@ xcb_finalize_present :: (window: *Window) {
     win.sync.resize_in_progress = false;
 }
 
-xcb_set_cursor :: (window: *Window, cursor: string) {
+xcb_set_cursor :: (window: *Window, cursor: Cursor) -> success: bool {
     // TODO: error check
     // xcb_check_usage(null, window);
+
+    // TODO: Maybe we should still try to load the cursor in case
+    // it's just something we don't preload.
+    if (cursor >= NUM_CURSORS) {
+        log_error("Unsupported cursor: %\n", cursor);
+        return false;
+    }
+
     win : *XCB_Window = window;
     display := win.base.display.xcb;
-    found, cursor := table_find(*display.cursors, cursor);
-    if found {
-        attrs: xcb_change_window_attributes_value_list_t;
-        attrs.cursor = cursor;
-        xcb_change_window_attributes_aux(display.handle, win.handle, .CURSOR, *attrs);
-    }
+    mapped_cursor := display.cursors[cursor];
+    attrs: xcb_change_window_attributes_value_list_t;
+    attrs.cursor = mapped_cursor;
+    xcb_change_window_attributes_aux(display.handle, win.handle, .CURSOR, *attrs);
+
+    return true;
 }
 
 xcb_clipboard_get_text :: (display: *Display) -> string {
