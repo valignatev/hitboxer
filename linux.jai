@@ -893,7 +893,7 @@ handle_timers :: (thread: *Thread) -> s64 {
             log_error(S(
                 "Could not start an ungrab timer. ",
                 "You might be in danger of hardlocking yourself out of using ",
-                "your devices if Hitboxer gets stuck durin input handling!\n",
+                "your devices if Hitboxer gets stuck during input handling!\n",
             ));
             close(grab_timer_fd);
             grab_timer_fd = -1;

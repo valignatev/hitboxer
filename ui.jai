@@ -547,9 +547,9 @@ draw_our_subwindow :: (state: *Subwindow_State) {
         close_button_pressed := false;
         inside_close_button  := false;
 
-        resize_related_disable := pressed_flags || over_flags;  // :TitleBarOverride  If we changed the mouse pointer image because we are over a drag rect, we by no means want to press or even highlight the button, because we are telling the user that a mouse click will drag the subwindow!
+        // resize_related_disable := pressed_flags || over_flags;  // :TitleBarOverride  If we changed the mouse pointer image because we are over a drag rect, we by no means want to press or even highlight the button, because we are telling the user that a mouse click will drag the subwindow!
         // @NOTE(valigo) - disable dragging subwindows entirely
-        // resize_related_disable := true;
+        resize_related_disable := true;
 
         c: Rect;  // For the close button.
         title_bar_text_rect := state.title_bar_rect;
