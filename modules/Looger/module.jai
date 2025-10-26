@@ -112,9 +112,9 @@ looger :: (message: string, data: *void, info: Log_Info) {
 
 
 handle_logging :: (thread: *Thread) -> s64 {
-    has_work_to_do := false;
 
     while true {
+        has_work_to_do := false;
         // We check if there's work to do
         for * pt, pti: looger_global.per_thread {
             if pt.write_offset > pt.read_offset {

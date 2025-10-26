@@ -48,7 +48,7 @@ create_virtual_device_error_handler :: () {
 
 // TODO: only supports keyboards for now, support other device types when it is time
 create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[]) -> success: bool, fd: s32 {
-    fd := open("/dev/uinputsdkljfdsklfj", O_RDWR | O_NONBLOCK);
+    fd := open("/dev/uinput", O_RDWR | O_NONBLOCK);
 
     if fd < 0 {
         code, s := System.get_error_value_and_string();

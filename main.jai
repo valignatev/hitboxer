@@ -871,7 +871,7 @@ draw_one_frame :: (dt: float, window: *Window) {
     padding := default_padding;
 
     x:, y:, window_width, window_height = get_dimensions(window, false);
-    // This is hardcoded because scrollable area scrollbare and frame depend on window size???
+    // This is hardcoded because scrollable area scrollbar and frame depend on window size???
     ui_per_frame_update(window, 800, 800, current_time);
 
     //
@@ -1279,12 +1279,16 @@ draw_one_frame :: (dt: float, window: *Window) {
             subwindow_info_presets_confirmation.title_text = "Confirm";
             subwindow_info_presets_confirmation.draw = draw_presets_confirmation;
 
-            log_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2);
-            subwindow_log.rect = log_window_rect;
             subwindow_log.title_text = "Logs";
             subwindow_log.draw = draw_log_window;
 
             subwindows_initted = true;
+        }
+
+        // Log display subwindow rect needs to resize together with the window
+        {
+            log_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2);
+            subwindow_log.rect = log_window_rect;
         }
         if subwindow_info_new_profile.open {
             subwindow_state := add_subwindow(*subwindow_info_new_profile, *theme);
@@ -1462,7 +1466,9 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
             theme = error_theme;
         }
 
-        _, _, released := our_button(s, it.message, identifier=it_index, theme=*theme);
+        found, title, details := split_from_left(it.message, #char "\n");
+
+        _, _, released := our_button(s, title, identifier=it_index, theme=*theme);
         if released {
             handler := it.data.(log_error_handler);
             if handler handler();
