@@ -362,7 +362,7 @@ thread_group_proc :: (group: *Thread_Group, thread: *Thread, work: *void) -> Thr
 // For now, this is just one thread that executes log error handlers.
 init_thread_group :: () {
     init(*thread_group, 1, thread_group_proc);
-    thread_group.logging = false;
+    thread_group.logging = DEBUG;
     start(*thread_group);
 }
 
