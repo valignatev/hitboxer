@@ -1475,28 +1475,38 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
 
         found, title, details := split_from_left(it.message, "\n");
 
-        _, _, released := our_button(s, title, identifier=it_index, theme=*theme);
+        _, _, released := our_button(s, title, identifier=it_index, theme=*theme, disable_over=!details);
         if released {
-            it.*.expanded = !it.expanded;
-            // display_logs[it_index].expanded = !it.expanded;
-            handler := it.data.(log_error_handler);
-            if handler handler();
+            it.expanded = !it.expanded;
+            if it.expanded {
+                handler := it.data.(log_error_handler);
+                if handler handler();
+            }
 
+        }
+
+        if it_index != display_logs.count  {
+            s.y += floor(default_button_height * 1.1);  // Just so r.y is in the right place for end_scrollable_region().
         }
 
         if details && it.expanded {
 
             detail_lines := split(details, "\n");
+            if detail_lines {
+                s.y += log_font.default_line_spacing;
+            }
+
             glyph_data := log_font.temporary_glyphs[0];
             // Max line count with respect to glyph width
             // glyph width includes a little padding around the glyph itself,
             // called "advance" in FreeType (tm) terminology.
             // minus two is for padding from left and right edges of the scrollable area
-            max_line_count := floor(s.w / glyph_data.advance).(s64) - 1;
+            // Do not squash beyong 500. Maybe unmagify this constant
+            max_line_count := floor(max(s.w, 500) / glyph_data.advance).(s64) - 1;
 
             for detail_lines {
-                s.y += log_font.default_line_spacing + s.h;
                 trimmed := trim(it);
+                if !trimmed continue;
 
                 // TODO: count unicode characters instead of bytes
                 while trimmed.count > max_line_count {
@@ -1520,11 +1530,8 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
                 }
                 // remainder := trim(slice(trimmed, offset, count));
                 Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, trimmed, theme.text_color);
+                s.y += log_font.default_line_spacing;
             }
-        }
-
-        if it_index != display_logs.count  {
-            s.y += floor(default_button_height * 1.1 + 0.5);  // Just so r.y is in the right place for end_scrollable_region().
         }
         // TODO: automatically scroll the log unless scroll bar is in action, or if a user manually
         // scrolling the log.
@@ -1614,6 +1621,7 @@ GetRect_Type_Indicator :: struct {
 
 
 #import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
+#import "Control_Flow";
 #import "Hash_Table";
 Input :: #import "Input";
 Simp :: #import "Simp";

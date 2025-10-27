@@ -36,8 +36,11 @@ get_dpi_scale :: (window: Window_Type) -> float {
 
 
 open_uinput_rules :: () {
-    #import "Process";
     run_command("xdg-open", "66-hitboxer-input.rules");
+}
+
+open_log_file :: () {
+    run_command("xdg-open", looger_global.log_file_path);
 }
 
 
@@ -46,28 +49,27 @@ create_virtual_device_error_handler :: () {
 }
 
 
+open_log_error_handler :: () {
+    add_work(*thread_group, xx open_log_file);
+}
+
+
 // TODO: only supports keyboards for now, support other device types when it is time
 create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[]) -> success: bool, fd: s32 {
-    fd := open("/dev/uinput", O_RDWR | O_NONBLOCK);
-
-    if fd < 0 {
-        code, s := System.get_error_value_and_string();
-        // TODO: better error - hint the user at which exactly they need to configure in udev
-        error_string := tprint("Could not open \"/dev/uinput\" for creating %, error: %\n", name, s);
-        error_string = tprint("% Reopen the program with root privileges, or configure required udev rules\n", error_string);
-        old_logger_data := context.logger_data;
-        context.logger_data = xx create_virtual_device_error_handler;
-        log_error("%", error_string);
-        context.logger_data = old_logger_data;
+    with_error(#code fd := open("/dev/uinput", O_RDWR | O_NONBLOCK), #code {
+        log_string := S(
+            "Could not open \"/dev/uinput\" for creating %\n",
+            "Error code: %: %\n",
+            "Reopen the program with root privileges, or configure required udev rules\n",
+        );
+        log_error(log_string, name, error_value, error_string,, logger_data=xx create_virtual_device_error_handler);
         return false, -1;
-    }
+    });
 
-    result := ioctl(fd, UI_SET_EVBIT, EV_KEY);
-    if result == -1 {
-        code, s := System.get_error_value_and_string();
-        log_error("Coulnd't initialize virtual device %: %, %\n", name, code, s);
+    with_error(#code result := ioctl(fd, UI_SET_EVBIT, EV_KEY), #code {
+        log_error("Coulnd't initialize virtual device %: %, %\n", name, error_value, error_string);
         return false, -1;
-    }
+    });
 
     if key_codes {
         for key_codes {
@@ -115,6 +117,12 @@ create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[
         log_error("Couldn't create a virtual device %: %, %\n", name, code, s);
         return false, -1;
     }
+
+    // TODO: implement with_error for binary operator which is assignment!
+    // with_error(#code result = ioctl(fd, UI_DEV_CREATE), #code {
+    //     log_error("Couldn't create a virtual device %: %, %\n", name, error_value, error_code);
+    //     return false, -1;
+    // });
 
     return true, fd;
 }
@@ -474,14 +482,18 @@ start_input_handling :: (thread: *Thread) -> s64 {
     {
         success:, uinput_fd = create_virtual_device("Hitboxer keyboard", .KEYBOARD);
         if !success {
-            log_error("Could not create a virtual keyboard, nothing will work\n");
+            log_error("Not being able to create Hitboxer keyboard means nothing will work\n");
             return -1;
         }
 
         // Test keyboard to check if we are cooked
         success, test_uinput_fd = create_virtual_device("Hitboxer healthcheck device", .KEYBOARD, .[HEALTHCHECK_KEY]);
         if !success {
-            log_error("Could not create a virtual keyboard for health checking. It might be dangerous to run without it, so we abort!\n");
+            log_error(S(
+                "Could not create a virtual keyboard for health checking\n",
+                "It might be dangerous to run without it, so we abort!\n"
+            ));
+
             return -1;
         }
     }
@@ -537,6 +549,11 @@ start_input_handling :: (thread: *Thread) -> s64 {
             return -1;
         }
     }
+
+    // Only start healthcheck thread if everything else is ok
+    timers_thread.starting_context.logger = looger;
+    thread_init(*timers_thread, handle_timers);
+    thread_start(*timers_thread);
 
     fd := libinput_get_fd(libinput);
     // TODO: apparently, libinput doesn't handle gamepads. So I need to open and add them to
@@ -870,13 +887,12 @@ handle_timers :: (thread: *Thread) -> s64 {
     // and then checks if this code got received and acknowledged. If we
     // don't see it happening, we just ungrab everything we grabbed previously.
 
-
     grab_timer_fd = timerfd_create(xx clockid_t.CLOCK_MONOTONIC, 0);
     if grab_timer_fd == -1 {
         // TODO: errno
         log_error("Could not create an ungrab timer. You might be in danger!\n");
     } else {
-        log("%\n", "timerfd created\n");
+        log("%\n", "timerfd created");
         timer_spec: itimerspec;
         timer_spec.it_value = .{tv_sec=5};
         timer_spec.it_interval = .{tv_sec=5};
@@ -891,7 +907,7 @@ handle_timers :: (thread: *Thread) -> s64 {
         if result == -1 {
             // TODO: errno
             log_error(S(
-                "Could not start an ungrab timer. ",
+                "Could not start an ungrab timer\n",
                 "You might be in danger of hardlocking yourself out of using ",
                 "your devices if Hitboxer gets stuck during input handling!\n",
             ));
@@ -929,6 +945,9 @@ handle_timers :: (thread: *Thread) -> s64 {
         code=SYN_REPORT,
         value=0,
     };
+    if !libinput_opened_devices.count {
+        log_error("We did not grab any input devices\n");
+    }
     while true {
         poll(pfd.data, xx pfd.count, -1);
 
@@ -940,6 +959,11 @@ handle_timers :: (thread: *Thread) -> s64 {
             // Handle Ungrabs in case our input handler gets stuck or something else
             value: s64;
             read(grab_timer_fd, *value, 8);
+
+            // If nothing is grabbed, there is no reason for healthcheck
+            if !libinput_opened_devices.count {
+                continue;
+            }
 
             if grab_timer_test_passed {
                 grab_timer_test_passed = false;
@@ -953,11 +977,12 @@ handle_timers :: (thread: *Thread) -> s64 {
                 // TODO: This will try to ungrab every healthcheck cycle, I should probably only do it once.
                 //  like, change grab_timer_test_passed to a three-way enum.
                 log_error(S(
-                    "Our input handler did not pass a healthcheck and likely hardlocked ",
-                    "you for few seconds, so we recovered from this disaster. ",
-                    "Please submit an issue to Github with relevant log.txt parts attached. ",
+                    "Our input handler did not pass a healthcheck\n",
+                    "It is likely that you got hardlocked out of your keyboard for few seconds.\n",
+                    "We recoreved from this disaster, but please submit an issue to GitHub ",
+                    "or send me an email. Preferably with log file attached\n",
                     "Sorry for the inconvenience!\n",
-                ));
+                ),, logger_data=xx open_log_error_handler);
                 for fd, sysname: libinput_opened_devices {
                     ungrab_result := ioctl(fd, EVIOCGRAB, 0);
                     if ungrab_result < 0 {
@@ -1156,18 +1181,17 @@ open_restricted :: (path_raw: *u8, flags: s32, user_data: *void) -> s32 #c_call 
 
     fd := open(path_raw, flags);
     if fd == -1 {
-        log_error("Could not open %\n", path);
         log_error(S(
+            "Could not open %\n",
             "Make sure you are a member of input group ",
             "(sudo usermod -a -G input your_username), ",
-            "or run Hitboxer with sudo\n",
-        ));
-        log_error(S(
+            "or run Hitboxer with sudo.\n",
             "On Wayland compositors, you might not be able to ",
             "run X11 GUI apps (which Hitboxer is) under sudo. ",
             "So you might have to run `xhost +local:localuser:root` ",
-            "to enable that, and the same command but with `-` to disable\n",
-        ));
+            "to be able to run it as root, and the same command but with ",
+            "`- (minus sign)` to roll back.\n",
+        ), path);
         return -1;
     }
 
@@ -1198,11 +1222,6 @@ close_restricted :: (fd: s32, user_data: *void) #c_call {
 interface_: libinput_interface = .{open_restricted, close_restricted};
 
 platform_init :: () -> success: bool, init_reason: string {
-    // Healthcheck timers stuff
-    timers_thread.starting_context.logger = looger;
-    thread_init(*timers_thread, handle_timers);
-    thread_start(*timers_thread);
-
     event_handling_thread.starting_context.logger = looger;
     thread_init(*event_handling_thread, start_input_handling);
     thread_start(*event_handling_thread);
@@ -1346,3 +1365,4 @@ using JDL :: #import "JDL";
 #import "Helpers";
 #import "libinput"(LOAD_AT_RUNTIME=true, LOAD_LIBUDEV_AT_RUNTIME=true);
 #import "libudev"(LOAD_AT_RUNTIME=true);
+#import "Process";
