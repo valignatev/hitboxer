@@ -290,33 +290,37 @@ CONFIG_HEADER :: #string HEADER
 HEADER
 
 
-display_log: [50]Log_String;
+Display_Log :: struct {
+    using #as log_string: Log_String;
+    expanded: bool;
+}
+
+
+display_logs: [50]Display_Log;
 display_slot := 0;
-log_pool: Flat_Pool;
+// NOTE: experimenting with allocating strings on a general heap. Keep this log_pool
+// as a reminder to come back to problem of sliding log window eventually
+// log_pool: Flat_Pool;
 
 looger_callback :: (log_string: Log_String) {
     if !(log_string.info.common_flags & (.ERROR | .WARNING)) return;
 
-    index := display_slot % display_log.count;
-
-    // "soft"-resetting the pool so that we can start allocating
-    // strings from the start, but keeping all of the memory valid.
-    // This is fine, because we hardcode all of the strings to be 100 bytes max.
-    // So even though we could have log strings that are cut, we will never step onto
-    // a string that is ahead of us.
-    if index == 0 {
-        log_pool.current_point = log_pool.memory_base;
-    }
+    index := display_slot % display_logs.count;
 
     message := trim(log_string.message);
-    internal := log_string;
-    mem := get(*log_pool, 100);
-    memcpy(mem, message.data, min(message.count, 100));
+    copied_message:= copy_string(message);
 
-    internal.message.count = message.count;
-    internal.message.data = mem;
 
-    display_log[index] = internal;
+    display_log: Display_Log;
+    display_log.log_string = log_string;
+    display_log.log_string.message = copied_message;
+
+    current_log := display_logs[index];
+    if current_log.message {
+        print("Freeing old log_string message\n");
+        free(current_log.message);
+    }
+    display_logs[index] = display_log;
     display_slot += 1;
 
     if subwindow_log.open {
@@ -339,11 +343,6 @@ init_logging :: (log_file_path: string) {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
     context.logger = looger;
-
-    // Init our own display log pool
-    log_pool.alignment = 8;
-    // 10k forward aligned
-    init(*log_pool, reserve=12288);
 
     looger_global.thread.starting_context.logger = looger;
     thread_init(*looger_global.thread, handle_logging);
@@ -776,7 +775,7 @@ main :: () {
         }
 
         JDL.update_window_events();
- 
+
         for Input.get_window_resizes() {
             Simp.update_window(it.window);
 
@@ -1432,6 +1431,15 @@ draw_presets_confirmation :: (state: *Subwindow_State, base_r: Rect, data: *void
 
 }
 
+my_find_index_of_any_from_right :: (s: string, bytes: string, start_index := 0) -> s64  #no_abc {  // Returns -1 if the byte is not found in the string.
+    cursor := s.count - 1 - start_index;
+    while cursor >= 0 {
+        if is_any(s[cursor], bytes)  return cursor;
+        cursor -= 1;
+    }
+
+    return -1;
+}
 
 draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     using current_program_state;
@@ -1450,13 +1458,14 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     // memcopying a static array because the original one gets populated by another thread,
     // and I don't want to sort it in that thread.
     // TODO: Is there a possibility to get a torn Log_String here somehow?
-    display_log_for_sorting := display_log;
+    display_logs_for_sorting := display_logs;
     sorted := Sort.quick_sort(
-        display_log_for_sorting,
+        display_logs_for_sorting,
         (a, b) => compare_apollo_times(a.timestamp, b.timestamp),
     );
 
-    for sorted {
+    // TODO: figure out how to get from sorted to the original array
+    for * display_logs {
         if !it.message {
             continue;
         }
@@ -1466,18 +1475,51 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
             theme = error_theme;
         }
 
-        found, title, details := split_from_left(it.message, #char "\n");
+        found, title, details := split_from_left(it.message, "\n");
 
         _, _, released := our_button(s, title, identifier=it_index, theme=*theme);
         if released {
+            it.*.expanded = !it.expanded;
+            // display_logs[it_index].expanded = !it.expanded;
             handler := it.data.(log_error_handler);
             if handler handler();
+
         }
 
-        // if draw_log_details {
-        // }
+        if details && it.expanded {
 
-        if it_index != display_log.count  {
+            detail_lines := split(details, "\n");
+            glyph_data := log_font.temporary_glyphs[0];
+            // Max line count with respect to glyph width
+            // glyph width includes a little padding around the glyph itself,
+            // called "advance" in FreeType (tm) terminology.
+            // minus two is for padding from left and right edges of the scrollable area
+            max_line_count := floor(s.w / glyph_data.advance).(s64) - 1;
+
+            for detail_lines {
+                s.y += log_font.default_line_spacing + s.h;
+                trimmed := trim(it);
+                // TODO: count unicode characters instead of bytes
+                offset := 0;
+                count := trimmed.count;
+                while count > max_line_count {
+                    closest_whitespace := my_find_index_of_any_from_right(trimmed, DEFAULT_SPACES);
+                    to_move := max_line_count;
+                    if closest_whitespace != -1 {
+                        to_move = max_line_count - (count - closest_whitespace - 1);
+                    }
+                    line := trim(slice(trimmed, offset, to_move));
+                    Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, line, theme.text_color);
+                    offset += to_move;
+                    count -= to_move;
+                    s.y += log_font.default_line_spacing;
+                }
+                remainder := trim(slice(trimmed, offset, count));
+                Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, remainder, theme.text_color);
+            }
+        }
+
+        if it_index != display_logs.count  {
             s.y += floor(default_button_height * 1.1 + 0.5);  // Just so r.y is in the right place for end_scrollable_region().
         }
         // TODO: automatically scroll the log unless scroll bar is in action, or if a user manually
