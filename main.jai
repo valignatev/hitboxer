@@ -783,8 +783,6 @@ main :: () {
                 should_reinit := (it.width != window_width) || (it.height != window_height);
                 window_width  = it.width;
                 window_height = it.height;
-
-                if should_reinit init_fonts(the_window);
             }
         }
 
@@ -1499,23 +1497,29 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
             for detail_lines {
                 s.y += log_font.default_line_spacing + s.h;
                 trimmed := trim(it);
+
                 // TODO: count unicode characters instead of bytes
-                offset := 0;
-                count := trimmed.count;
-                while count > max_line_count {
-                    closest_whitespace := my_find_index_of_any_from_right(trimmed, DEFAULT_SPACES);
-                    to_move := max_line_count;
+                while trimmed.count > max_line_count {
+                    // We get the string with lenght that can fit into the log window
+                    // And then additionally chop it by the word boundary from right
+                    line := trim(slice(trimmed, 0, max_line_count));
+                    closest_whitespace := my_find_index_of_any_from_right(line, DEFAULT_SPACES);
+
+                    to_move := line.count;
                     if closest_whitespace != -1 {
-                        to_move = max_line_count - (count - closest_whitespace - 1);
+                        to_move = line.count - (line.count - closest_whitespace - 1);
                     }
-                    line := trim(slice(trimmed, offset, to_move));
+
+                    line = trim(slice(line, 0, to_move));
                     Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, line, theme.text_color);
-                    offset += to_move;
-                    count -= to_move;
+
+                    trimmed.data += to_move;
+                    trimmed.count -= to_move;
+
                     s.y += log_font.default_line_spacing;
                 }
-                remainder := trim(slice(trimmed, offset, count));
-                Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, remainder, theme.text_color);
+                // remainder := trim(slice(trimmed, offset, count));
+                Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, trimmed, theme.text_color);
             }
         }
 
@@ -1558,12 +1562,6 @@ hack_bold :: #run -> string {
 }
 
 init_fonts :: (window: Window_Type) {
-    if !working_directory_set {
-        path := path_strip_filename(System.get_path_of_running_executable());
-        set_working_directory(path);
-        working_directory_set = true;
-    }
-
     dpi := get_dpi_scale(window);
 
     pixel_height := 600 / dpi / 26;
@@ -1604,7 +1602,6 @@ header_font: *UI_Font;
 error_color := Vector4.{.86, .26, .11, .40};
 error_color_over := Vector4.{.86, .165, .105, .57};
 
-working_directory_set := false;
 mapping_resolving_hook_is_installed := false;
 mapping_setting_hook_is_installed := false;
 
