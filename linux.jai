@@ -110,19 +110,10 @@ create_virtual_device :: (name: string, type: Device_Type, key_codes: []u16 = .[
         return false, -1;
     }
 
-    // TODO: Should I really call destroy? Seems like Linux destroys my virtual keyboard anyway
-    result = ioctl(fd, UI_DEV_CREATE);
-    if result == -1 {
-        code, s := System.get_error_value_and_string();
-        log_error("Couldn't create a virtual device %: %, %\n", name, code, s);
+    with_error(#code result = ioctl(fd, UI_DEV_CREATE), #code {
+        log_error("Couldn't create a virtual device %: %, %\n", name, error_value, error_string);
         return false, -1;
-    }
-
-    // TODO: implement with_error for binary operator which is assignment!
-    // with_error(#code result = ioctl(fd, UI_DEV_CREATE), #code {
-    //     log_error("Couldn't create a virtual device %: %, %\n", name, error_value, error_code);
-    //     return false, -1;
-    // });
+    });
 
     return true, fd;
 }

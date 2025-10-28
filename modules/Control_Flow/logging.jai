@@ -1,6 +1,6 @@
 decl_error_msg :: #string ERR
-Only declarations with procedure call on the right side are supported,
-but right side of provided declaration is %
+Declarations and assignments only supported with procedure call on the right side,
+but right side of provided code is %
 ERR
 
 with_error :: (code: Code, on_error: Code = #code {}) #expand {
@@ -45,15 +45,17 @@ with_error :: (code: Code, on_error: Code = #code {}) #expand {
 
                 return compiler_get_code(decl);
             }
+            case .BINARY_OPERATOR; {
+                op := root.(*Code_Binary_Operator);
+                if op.right.kind != .PROCEDURE_CALL {
+                    compiler_report(sprint(decl_error_msg, op.right.kind));
+                }
+
+                return code;
+            }
             case .PROCEDURE_CALL; {
                 return code;
             }
-            // TODO: implement for binary operator which is assignment!
-            // Example:
-            // with_error(#code result = ioctl(fd, UI_DEV_CREATE), #code {
-            //     log_error("Couldn't create a virtual device %: %, %\n", name, error_value, error_code);
-            //     return false, -1;
-            // });
         }
 
         compiler_report(sprint("with_error does not support this code kind: %\n", root.kind));
