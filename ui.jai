@@ -101,6 +101,45 @@ arrow :: (base_rect: GR.Rect, state: *GR.Dropdown_State, theme: *GR.Dropdown_The
     }
 }
 
+our_key :: (r: Rect, text: string, theme: *GR.Button_Theme) {
+    
+    frame_color := theme.frame_color;
+    surface_color := theme.surface_color;
+
+    shape: Rectangle_Shape;
+    rounded_rectangle(r, shape, surface_color, frame_color);
+    label(r, text, *theme.label_theme);
+    // Simp.immediate_quad(
+    //     r.x , r.y,
+    //     r.x + r.w , r.y + r.h,
+    //     frame_color,
+    // );
+
+    // Simp.immediate_quad(
+    //     r.x + 2, r.y + 2,
+    //     r.x + r.w - 2, r.y + r.h - 2,
+    //     surface_color,
+    // );
+
+    // Simp.immediate_quad(
+    //     r.x + 17, r.y + 17,
+    //     r.x + r.w - 17, r.y + r.h - 17,
+    //     frame_color,
+    // );
+
+    // Simp.immediate_quad(
+    //     r.x + 19, r.y + 19,
+    //     r.x + r.w - 19, r.y + r.h - 19,
+    //     surface_color,
+    // );
+
+
+    // text_width := Simp.prepare_text(header_font, text);
+    // character_height := header_font.character_height;
+    // em_width := header_font.em_width;
+    // Simp.draw_text(header_font, xx ((r.x + r.w) - (r.w / 2)) - text_width / 2, xx r.y + 24 + character_height, text, theme.text_color);
+}
+
 our_checkbox :: (_r: Rect, text: string, selected: bool, theme: *Checkbox_Theme = null, identifier: s64 = 0, loc := #caller_location) -> changed: bool, checkbox_state: Checkbox_State {
     using current_program_state;
 

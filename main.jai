@@ -46,6 +46,7 @@ subwindow_new_profile_just_got_closed := false;
 searchbar_should_be_active := true;
 subwindow_info_presets_confirmation: Subwindow_Info;
 subwindow_log: Subwindow_Info;
+subwindow_inputs: Subwindow_Info;
 default_button_height := 50.0;
 default_padding := 10.0;
 
@@ -695,6 +696,7 @@ main :: () {
     // We need to set this one to false very early, because logger checks for subwindow_log.open
     // And for consistency we set others also here so all subwindow config is together.
     subwindow_log.open = false;
+    subwindow_inputs.open = false;
 
     using current_program_state;
 
@@ -758,6 +760,7 @@ main :: () {
     start_detecting_focused_program();
 
     Simp.set_render_target(the_window, .LEFT_HANDED);
+
     init_fonts(the_window);
     ui_init("", *gd_draw_procs);
 
@@ -1248,17 +1251,33 @@ draw_one_frame :: (dt: float, window: *Window) {
     // Log window
     {
         log_button_theme := my_theme.button_theme;
-        log_button_theme.surface_color = error_color;
-        log_button_theme.surface_color_over = error_color_over;
         log_x := 0;
         log_y := window_height - button_height;
-        log_width := window_width;
+        log_width := window_width/2;
         log_height := button_height;
         r := get_rect(xx log_x, log_y, xx log_width, xx log_height);
-        _, _, released := our_button(r, "LOG SITUATION IS CRAZY", theme=*log_button_theme);
+        _, _, released := our_button(r, "Error Logs", theme=*log_button_theme);
 
         if released {
-            subwindow_log.open = true;
+            subwindow_log.open = !subwindow_log.open;
+            subwindow_inputs.open = false;
+        }
+    }
+
+    // Input display
+    {
+        inputs_button_theme := my_theme.button_theme;
+        inputs_x := window_width/2;
+        inputs_y := window_height - button_height;
+        inputs_width := window_width/2;
+        inputs_height := button_height;
+        r := get_rect(xx inputs_x, inputs_y, xx inputs_width, xx inputs_height);
+        _, _, released := our_button(r, "Input Display", theme=*inputs_button_theme);
+
+        if released {
+            subwindow_inputs.open = !subwindow_inputs.open;
+            subwindow_inputs.user_data = xx *dt;
+            subwindow_log.open = false;
         }
     }
 
@@ -1279,13 +1298,21 @@ draw_one_frame :: (dt: float, window: *Window) {
             subwindow_log.title_text = "Logs";
             subwindow_log.draw = draw_log_window;
 
+            subwindow_inputs.title_text = "NohBoard but bad";
+            subwindow_inputs.draw = draw_inputs_window;
+
             subwindows_initted = true;
         }
 
         // Log display subwindow rect needs to resize together with the window
         {
-            log_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2);
+            log_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2 - button_height);
             subwindow_log.rect = log_window_rect;
+        }
+        // Same with inputs subwindow
+        {
+            inputs_window_rect := get_rect(0, window_height.(float32)/2, xx window_width, window_height.(float32)/2 - button_height);
+            subwindow_inputs.rect = inputs_window_rect;
         }
         if subwindow_info_new_profile.open {
             subwindow_state := add_subwindow(*subwindow_info_new_profile, *theme);
@@ -1306,7 +1333,11 @@ draw_one_frame :: (dt: float, window: *Window) {
         }
 
         if subwindow_log.open {
-            subwindow_state := add_subwindow(*subwindow_log, *theme);
+            add_subwindow(*subwindow_log, *theme);
+        }
+
+        if subwindow_inputs.open {
+            add_subwindow(*subwindow_inputs, *theme);
         }
     }
 
@@ -1528,9 +1559,10 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
 
                     s.y += log_font.default_line_spacing;
                 }
-                // remainder := trim(slice(trimmed, offset, count));
-                Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, trimmed, theme.text_color);
-                s.y += log_font.default_line_spacing;
+                if trimmed {
+                    Simp.draw_text(log_font, xx s.x + glyph_data.advance, xx s.y, trimmed, theme.text_color);
+                    s.y += log_font.default_line_spacing;
+                }
             }
         }
         // TODO: automatically scroll the log unless scroll bar is in action, or if a user manually
@@ -1539,6 +1571,24 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
     }
 
     end_scrollable_region(region, s.x + s.w, s.y + s.h, *scroll_value_log_region);
+}
+
+draw_inputs_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
+    dt := data.(*float);
+    print("dt: %\n", dt.*);
+    key_theme := my_theme.button_theme;
+    key_theme.label_theme.alignment = .Center;
+    button_height := 100.0;
+    button_width := 100.0;
+
+    key_rect := base_r;
+
+    key_rect.x = base_r.w/2 - button_width;
+    key_rect.y = base_r.y + button_height;
+    key_rect.w = button_width;
+    key_rect.h = button_height;
+
+    our_key(key_rect, "A", *key_theme);
 }
 
 scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scroll_value: *float) {
