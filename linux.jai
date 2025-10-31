@@ -585,11 +585,9 @@ start_input_handling :: (thread: *Thread) -> s64 {
             key := libinput_event_keyboard_get_key(keyboard_event);
             state := libinput_event_keyboard_get_key_state(keyboard_event);
 
-#if DEBUG {
-            if state == .LIBINPUT_KEY_STATE_PRESSED {
-                log("% pressed (%)\n", get_key_name(key), key);
+            if state == .PRESSED && key != HEALTHCHECK_KEY {
+                log_input_event(.{key_code=key, state=xx state});
             }
-}
 
             defer if key == HEALTHCHECK_KEY {
                 grab_timer_test_passed = true;
@@ -666,7 +664,7 @@ handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state
         key != HEALTHCHECK_KEY
        ) {
         next_state := Mapping_State.NOTHING;
-        if ev.value == IS_DOWN && ev.type == EV_KEY {
+        if ev.value == xx Key_State.IS_DOWN && ev.type == EV_KEY {
             if active_state == .SETTING_SOURCE {
                 print("mappings before:\n");
                 for active_profile_in_ui.mappings {
@@ -833,7 +831,7 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
                 output_events[0] = input_event.{
                     type=EV_KEY,
                     code=cast(u16)opposing_code,
-                    value=IS_UP,
+                    value=xx Key_State.IS_UP,
                 };
                 output_events[1] = input_event.{
                     type=EV_SYN,
@@ -852,7 +850,7 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
                     time=.{},
                     type=EV_KEY,
                     code=cast(u16)opposing_code,
-                    value=IS_DOWN,
+                    value=xx Key_State.IS_DOWN,
                 };
                 output_events[1] = input_event.{
                     time=.{},
@@ -1036,6 +1034,12 @@ get_key_name :: (key_scan_code: u32) -> string {
         case KEY_PAGEDOWN;
             KEY_NAMES[KEY_PAGEDOWN] = "PgDown";
             return "PgDown";
+        case KEY_LEFTCTRL;
+            KEY_NAMES[KEY_LEFTCTRL] = "Ctrl L";
+            return "Ctrl L";
+        case KEY_RIGHTCTRL;
+            KEY_NAMES[KEY_RIGHTCTRL] = "Ctrl R";
+            return "Ctrl R";
         case KEY_KP0; return "Num 0";
         case KEY_KP1; return "Num 1";
         case KEY_KP2; return "Num 2";

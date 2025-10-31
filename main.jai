@@ -21,8 +21,16 @@ FOR FUTURE:
 // Indices are key scancodes
 KEY_NAMES: [65535]string;
 
-IS_UP :: 0;
-IS_DOWN :: 1;
+display_logs: [50]Display_Log;
+display_slot := 0;
+
+inputs_log: [24]Input_Event;
+
+// s32 because that's what it is on Linux lol
+Key_State :: enum s32 {
+    IS_UP :: 0;
+    IS_DOWN :: 1;
+}
 
 current_time: float64;
 last_time: float64;
@@ -172,6 +180,28 @@ operator== :: (a: Mapping_Bind, b: Mapping_Bind) -> bool {
     }
 }
 
+
+Input_Event :: struct {
+    timestamp: Apollo_Time;
+    key_code: u32;
+    state: Key_State;
+}
+
+
+event_slot := 0;
+// This gets written from input handling thread.
+// And it is read from main thread (that renders ui).
+// So it is technically possible to read half of the struct.
+// TODO: Maybe pass it through the Looger.
+log_input_event :: (event: Input_Event) {
+    e := event;
+    e.timestamp = current_time_consensus();
+    inputs_log[event_slot % inputs_log.count] = e;
+    event_slot += 1;
+    platform_wake_up_main_thread();
+}
+
+
 Profile :: struct {
     platform: Platform;
     program: string;
@@ -297,8 +327,6 @@ Display_Log :: struct {
 }
 
 
-display_logs: [50]Display_Log;
-display_slot := 0;
 // NOTE: experimenting with allocating strings on a general heap. Keep this log_pool
 // as a reminder to come back to problem of sliding log window eventually
 // log_pool: Flat_Pool;
@@ -1272,7 +1300,7 @@ draw_one_frame :: (dt: float, window: *Window) {
         inputs_width := window_width/2;
         inputs_height := button_height;
         r := get_rect(xx inputs_x, inputs_y, xx inputs_width, xx inputs_height);
-        _, _, released := our_button(r, "Input Display", theme=*inputs_button_theme);
+        _, _, released := our_button(r, "Input Debug", theme=*inputs_button_theme);
 
         if released {
             subwindow_inputs.open = !subwindow_inputs.open;
@@ -1574,21 +1602,49 @@ draw_log_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
 }
 
 draw_inputs_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
-    dt := data.(*float);
-    print("dt: %\n", dt.*);
+    // dt := data.(*float);
+
     key_theme := my_theme.button_theme;
     key_theme.label_theme.alignment = .Center;
-    button_height := 100.0;
-    button_width := 100.0;
+    key_theme.font = inputs_font;
 
-    key_rect := base_r;
+    width := 100.0;
+    height := 100.0;
 
-    key_rect.x = base_r.w/2 - button_width;
-    key_rect.y = base_r.y + button_height;
-    key_rect.w = button_width;
-    key_rect.h = button_height;
+    rect := base_r;
+    rect.w = width;
+    rect.h = height;
 
-    our_key(key_rect, "A", *key_theme);
+    now := current_time_consensus();
+    for inputs_log {
+        key_name := get_key_name(it.key_code);
+        timestamp := it.timestamp;
+
+        time_delta := to_float64_seconds(now - timestamp).(float32);
+
+        if it_index % 8 == 0 {
+            rect.x = (base_r.x + 10);
+        } else {
+            rect.x += width + 10;
+        }
+
+        rect.y = (base_r.y + 10) + height * (it_index / 8);
+        if it_index / 8 {
+            rect.y += 10;
+        }
+
+        // 1 second of cooldown
+        pressed_factor := 0.0;
+        if time_delta <= 1 {
+            pressed_factor = 1 - time_delta;
+        }
+        if pressed_factor {
+            current_program_state.need_to_rerender = true;
+        }
+        our_key(rect, key_name, *key_theme, pressed_factor=pressed_factor);
+
+    }
+
 }
 
 scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scroll_value: *float) {
@@ -1625,9 +1681,12 @@ init_fonts :: (window: Window_Type) {
     header_height := 600 / dpi / 20;
     small_height := 600 / dpi / 36;
     log_height := 600 / dpi / 30;
+    inputs_height := 600 / dpi / 20;
+
     button_font = Simp.get_font_at_size(hack_regular.([]u8), (pixel_height * dpi).(s64));
     small_label_font = Simp.get_font_at_size(hack_regular.([]u8), (small_height * dpi).(s64));
     log_font = Simp.get_font_at_size(hack_regular.([]u8), (log_height * dpi).(s64));
+    inputs_font = Simp.get_font_at_size(hack_regular.([]u8), (inputs_height * dpi).(s64));
 
     header_font = Simp.get_font_at_size(hack_bold.([]u8), (header_height * dpi).(s64));
     assert(button_font != null);
@@ -1652,6 +1711,7 @@ UI_Font :: Simp.Dynamic_Font;
 
 small_label_font: *UI_Font;
 log_font: *UI_Font;
+inputs_font: *UI_Font;
 button_font: *UI_Font;
 header_font: *UI_Font;
 
