@@ -1653,42 +1653,43 @@ scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scro
     scroll_value.* = max_scroll_value;
 }
 
-hack_regular :: #run -> string {
+hack_regular :: #run -> []u8 {
     content, success := read_entire_file("./data/Hack-Regular.ttf");
     if success {
-        return content;
+        return xx content;
     } else {
         #import "Compiler";
-        compiler_report("Couldn't find data/Hack-Regular.ttf");
+        compiler_report("Couldn't find font data/Hack-Regular.ttf");
     }
-    return "";
+    return .[];
 }
-hack_bold :: #run -> string {
+
+hack_bold :: #run -> []u8 {
     content, success := read_entire_file("./data/Hack-Bold.ttf");
     if success {
-        return content;
+        return xx content;
     } else {
         #import "Compiler";
-        compiler_report("Couldn't find data/Hack-Bold.ttf");
+        compiler_report("Couldn't find font data/Hack-Bold.ttf");
     }
-    return "";
+    return .[];
 }
 
 init_fonts :: (window: Window_Type) {
     dpi := get_dpi_scale(window);
 
-    pixel_height := 600 / dpi / 26;
+    pixel_height  := 600 / dpi / 26;
     header_height := 600 / dpi / 20;
-    small_height := 600 / dpi / 36;
-    log_height := 600 / dpi / 30;
+    small_height  := 600 / dpi / 36;
+    log_height    := 600 / dpi / 30;
     inputs_height := 600 / dpi / 20;
 
-    button_font = Simp.get_font_at_size(hack_regular.([]u8), (pixel_height * dpi).(s64));
-    small_label_font = Simp.get_font_at_size(hack_regular.([]u8), (small_height * dpi).(s64));
-    log_font = Simp.get_font_at_size(hack_regular.([]u8), (log_height * dpi).(s64));
-    inputs_font = Simp.get_font_at_size(hack_regular.([]u8), (inputs_height * dpi).(s64));
+    button_font = Simp.get_font_at_size(hack_regular, (pixel_height * dpi).(s64));
+    small_label_font = Simp.get_font_at_size(hack_regular, (small_height * dpi).(s64));
+    log_font = Simp.get_font_at_size(hack_regular, (log_height * dpi).(s64));
+    inputs_font = Simp.get_font_at_size(hack_regular, (inputs_height * dpi).(s64));
 
-    header_font = Simp.get_font_at_size(hack_bold.([]u8), (header_height * dpi).(s64));
+    header_font = Simp.get_font_at_size(hack_bold, (header_height * dpi).(s64));
     assert(button_font != null);
 }
 
