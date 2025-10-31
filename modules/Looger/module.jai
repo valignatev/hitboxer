@@ -3,7 +3,9 @@
 Looger_Callback :: #type (log_string: Log_String);
 
 Looger :: struct {
-    initted: bool;
+    all_initted: bool;
+    thread_started: bool;
+    thread_start_timeout_milliseconds: u32 = 2000;
     thread: Thread;
     callback: Looger_Callback;
     max_log_file_size := 1000_000;
@@ -38,7 +40,19 @@ Log_String :: struct {
 }
 
 
-init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32, also_log_to_stdout: bool = false, callback: Looger_Callback = null) -> success: bool {
+THREAD_START_TIMEOUT_ERROR :: #string,\% ERR
+logging handling thread coulnd't start in time (configured as % milliseconds), aborting Looger.
+HINT: You can try to configure bigger timeout if you are running on a potato, or your computer is under a heavy load
+ERR
+
+
+init_looger :: (
+    num_threads: u32,
+    log_file_path: string,
+    max_log_file_size: u32,
+    also_log_to_stdout: bool = false,
+    callback: Looger_Callback = null
+) -> success: bool {
     looger_global.per_thread = NewArray(num_threads, Looger_Per_Thread);
     looger_global.log_file_path = log_file_path;
     looger_global.also_log_to_stdout = also_log_to_stdout;
@@ -59,10 +73,26 @@ init_looger :: (num_threads: u32, log_file_path: string, max_log_file_size: u32,
 
     if !file_open_success {
         log_error("Couldn't open the log file, your errors will only be logged to the console\n");
-    } else {
-        looger_global.initted = true;
     }
 
+    looger_global.thread.starting_context.logger = looger;
+    thread_init(*looger_global.thread, handle_logging);
+    thread_start(*looger_global.thread);
+
+    now := current_time_consensus();
+    delta := 0;
+
+    while !looger_global.thread_started && delta < looger_global.thread_start_timeout_milliseconds * 1000 {
+        log_debug("init_looger waiting for % us on logging handling thread to start\n", delta);
+        delta = to_microseconds(current_time_consensus() - now);
+        spin();
+    }
+    if !looger_global.thread_started {
+        log_error(THREAD_START_TIMEOUT_ERROR, looger_global.thread_start_timeout_milliseconds);
+        return false;
+    }
+
+    looger_global.all_initted = true;
     return true;
 }
 
@@ -112,7 +142,7 @@ looger :: (message: string, data: *void, info: Log_Info) {
 
 
 handle_logging :: (thread: *Thread) -> s64 {
-
+    looger_global.thread_started = true;
     while true {
         has_work_to_do := false;
         // We check if there's work to do
@@ -178,7 +208,7 @@ write_log :: (using log_string: Log_String) {
         formatted_message = tprint("%: %", date_s, message);
     }
 
-    if !initted {
+    if !all_initted {
         runtime_support_default_logger(formatted_message, data, info);
         return;
     }

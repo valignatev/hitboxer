@@ -165,22 +165,6 @@ operator== :: (a: Mapping_Bind, b: Mapping_Bind) -> bool {
     return false;
 }
 
-#if 0 {
-    Mapping2 :: struct {
-        key: *Key; // #as using key maybe?
-        mode: Mapping_Mode;
-    }
-
-    Key :: struct {
-        scancode: u32;
-        device_type: Device_Type;
-        state: bool; // Pressed or released
-        name: string;
-        mappings: []Mapping2; // ???
-    }
-}
-
-
 Input_Event :: struct {
     timestamp: Apollo_Time;
     key_code: u32;
@@ -371,11 +355,8 @@ init_logging :: (log_file_path: string) {
     if !success {
         log_error("Could not initialize the logger, the logging will be crappy!\n");
     }
-    context.logger = looger;
 
-    looger_global.thread.starting_context.logger = looger;
-    thread_init(*looger_global.thread, handle_logging);
-    thread_start(*looger_global.thread);
+    context.logger = looger;
 }
 
 
@@ -1731,7 +1712,11 @@ GetRect_Type_Indicator :: struct {
 }
 
 
-#import "Basic"()(TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG, MEMORY_DEBUGGER=DEBUG, ENABLE_ASSERT=DEBUG);
+#import "Basic"()(
+    TEMP_ALLOCATOR_POISON_FREED_MEMORY=DEBUG,
+    MEMORY_DEBUGGER=DEBUG,
+    ENABLE_ASSERT=DEBUG,
+);
 #import "Control_Flow";
 #import "Hash_Table";
 Input :: #import "Input";
