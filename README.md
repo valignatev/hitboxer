@@ -3,7 +3,7 @@
 # Hitboxer, key remapper and SOCD tool for epic gamers
 
 ## NOTE
-The program is in progress, there will be dragons. Still, please reach out to me or leave an issue on GitHub if something that you were using suddenly breaks.
+The program has ALPHA quality, there will be dragons. Still, please reach out to me or leave an issue on GitHub if something that you were using suddenly breaks.
 
 
 ## Install
