@@ -3,7 +3,6 @@ FOR FUTURE:
 - Add configurable delay before overriding an input
 - Disallow multiple binds for the same button
 - Better focused program recognition. Now it's just case-sensitive string contains.
-- Debug UI. Showing stuff like currently pressed key, when mappings kick in, list of mappings.
 - Mouse bindings
 - Controller bindings
 - Localiazation - maybe just a text file with user-submitted strings.
@@ -20,6 +19,7 @@ FOR FUTURE:
 // I think 256 key codes should be enough for any type of keyboard...
 // Indices are key scancodes
 KEY_NAMES: [65535]string;
+active_binds: [1000]Mapping_Bind;
 
 display_logs: [50]Display_Log;
 display_slot := 0;
@@ -96,12 +96,10 @@ dummy_input_text_state: Text_Input_State;
 current_program_state: Program_State;
 
 dummy_bind := Mapping_Bind.{};
-get_key_mapping :: (source_scan_code: u32) -> Mapping_Bind {
-    using current_program_state;
 
-    found, destination := table_find(*active_profile.mappings, source_scan_code);
-    if !found return dummy_bind;
-    return destination;
+get_key_mapping :: inline (source_scan_code: u32) -> Mapping_Bind {
+    bind := active_binds[source_scan_code];
+    return bind;
 }
 
 SETTINGS_VERSION :: 1;
@@ -143,22 +141,16 @@ Device_Type :: enum u32 {
 }
 
 Mapping_Bind :: struct {
-    // TODO: rename to device_type
     kind: Device_Type;
     mode: Mapping_Mode;
     code: u32;
 }
 
-// TODO: change this, to array of mappings from source to destination, or a Hash_Table
 Mapping :: struct {
     source: Mapping_Bind;
     destination: Mapping_Bind;
     mode: Mapping_Mode;
 }
-
-// hash_function :: (source: u32) -> u32 { return source + 2; }
-// Key can be something like N lower bits is code, and then some high byte for the Bind_Kind.
-Mappings :: Table(u32, Mapping_Bind, /*hash_function*/);
 
 operator== :: (a: Mapping_Bind, b: Mapping_Bind) -> bool {
     if a.code == b.code && a.mode == b.mode && a.kind == b.kind return true;
@@ -186,14 +178,33 @@ log_input_event :: (event: Input_Event) {
 }
 
 
+// TODO: maybe just print them as they are displayed
+log_mappings :: (profile: Profile, log_before: string) {
+    b: String_Builder;
+    print_to_builder(*b, "%\n", log_before);
+    for profile.mappings {
+        source := it.source;
+        dest := it.destination;
+        print_to_builder(
+            *b,
+            "\nsource: %, kind: % - ",
+            get_key_name(source.code),
+            source.kind,
+        );
+        dest_formatted := print_to_builder(
+            *b,
+            "dest: mode: %, code: %, kind: %",
+            dest.mode, get_key_name(dest.code), dest.kind
+        );
+    }
+    log_debug("%\n", builder_to_string(*b,, temp));
+}
+
+
 Profile :: struct {
     platform: Platform;
     program: string;
-    mappings: Mappings;
-    // Array of binds for showing in UI and for some interemediate states,
-    // mostly because iteration over the hash table is not
-    // consistent after adding/removing keys.
-    mappings_array: [..]Mapping;
+    mappings: [..]Mapping;
 }
 
 profiles: [..]Profile;
@@ -213,8 +224,12 @@ selected_preset: Preset_Data;
 set_preset :: (preset: Preset, mode: Mapping_Mode) {
     using current_program_state;
 
-    array_reset_keeping_memory(*active_profile_in_ui.mappings_array);
-    table_reset(*active_profile_in_ui.mappings);
+    for active_profile_in_ui.mappings {
+        active_binds[it.source.code] = dummy_bind;
+        active_binds[it.destination.code] = dummy_bind;
+    }
+
+    array_reset_keeping_memory(*active_profile_in_ui.mappings);
 
     mappings: [4]u32;
     if preset == .WASD {
@@ -289,13 +304,13 @@ set_preset :: (preset: Preset, mode: Mapping_Mode) {
         mode=mode,
     };
 
-    table_set(*active_profile_in_ui.mappings, mapping1.source.code, mapping1.destination);
-    table_set(*active_profile_in_ui.mappings, mapping2.source.code, mapping2.destination);
-    table_set(*active_profile_in_ui.mappings, mapping3.source.code, mapping3.destination);
-    table_set(*active_profile_in_ui.mappings, mapping4.source.code, mapping4.destination);
+    active_binds[mapping1.source.code] = mapping1.destination;
+    active_binds[mapping2.source.code] = mapping2.destination;
+    active_binds[mapping3.source.code] = mapping3.destination;
+    active_binds[mapping4.source.code] = mapping4.destination;
 
-    array_add(*active_profile_in_ui.mappings_array, mapping1);
-    array_add(*active_profile_in_ui.mappings_array, mapping3);
+    array_add(*active_profile_in_ui.mappings, mapping1);
+    array_add(*active_profile_in_ui.mappings, mapping3);
     finalize_state();
 }
 
@@ -581,11 +596,10 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                         mapping.destination = .{code=bind, mode=mapping_bind.mode};
                     }
 
-                    table_set(*profile.mappings, source, mapping_bind);
-                    array_add(*profile.mappings_array, mapping);
-
-                    if mapping.mode == .OPPOSITE || mapping.mode == .OPPOSITE_NO_REPRESS {
-                        table_set(*profile.mappings, mapping.destination.code, mapping.source);
+                    array_add(*profile.mappings, mapping);
+                    active_binds[mapping.source.code] = mapping.destination;
+                    if mapping.mode == .OPPOSITE || mapping.mode == .OPPOSITE_NO_REPRESS || mapping.mode == .NEUTRAL {
+                        active_binds[mapping.destination.code] = mapping.source;
                     }
 
                 case; tfh.error(*handler, "Unexpected profile configuration ignored: %\n", left);
@@ -615,7 +629,6 @@ maybe_fixup_settings :: () {
         }
     }
 
-    default_mappings: Mappings;
     if !default_found {
         array_insert_at(*profiles, .{
             platform=CURRENT_PLATFORM,
@@ -663,7 +676,7 @@ serialize_settings :: () -> succes: bool {
         print_to_builder(*b, "program: %\n", profile.program);
         print_to_builder(*b, "platform: %\n", enum_value_to_name(profile.platform));
 
-        for mapping: profile.mappings_array {
+        for mapping: profile.mappings {
             print_to_builder(*b, "mapping: % % %\n", enum_value_to_name(mapping.mode), mapping.source.code, mapping.destination.code);
         }
     }
@@ -681,11 +694,7 @@ serialize_settings :: () -> succes: bool {
 finalize_state :: () {
     using current_program_state;
     if active_state != .ADDING_NEW_PROFILE {
-        log("mappings after:\n");
-        for active_profile_in_ui.mappings {
-            dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-            log("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
-        }
+        log_mappings(active_profile_in_ui, "mappings after:");
     }
     active_state = .NOTHING;
     serialize_settings();
@@ -1035,19 +1044,12 @@ draw_one_frame :: (dt: float, window: *Window) {
         next_y = label_rect.y + label_rect.h;
 
         if add_mapping_released && active_state == .NOTHING {
-            log("mappings before:\n");
-            for active_profile_in_ui.mappings {
-                dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                log("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
-            }
+            log_mappings(active_profile_in_ui, "mappings before:");
             active_state = .SETTING_SOURCE;
             next_state = .SETTING_DESTINATION;
 
-            source := Mapping_Bind.{code=KEY_RESERVED};
-            dest := Mapping_Bind.{code=KEY_RESERVED};
-            array_insert_at(*active_profile_in_ui.mappings_array, .{source=source, destination=dest}, 0);
-            active_mapping = *active_profile_in_ui.mappings_array[0];
-            table_set(*active_profile_in_ui.mappings, source.code, dest);
+            array_insert_at(*active_profile_in_ui.mappings, .{}, 0);
+            active_mapping = *active_profile_in_ui.mappings[0];
             set_key_mapping_hook(window);
 
             // need_to_scroll_mappings_region = true;
@@ -1108,7 +1110,7 @@ draw_one_frame :: (dt: float, window: *Window) {
         dropdown_theme.theme_for_current_choice.rectangle_shape.rounding_flags = 0;
         dropdown_theme.theme_for_current_value.text_color = my_theme.button_theme.surface_color;
 
-        for * mapping: active_profile_in_ui.mappings_array {
+        for * mapping: active_profile_in_ui.mappings {
             button_width := (s.w - 50)/3 - 1;
             source_rect := get_rect(s.x, s.y, button_width, button_height);
             source_name := get_key_name(mapping.source.code);
@@ -1120,11 +1122,7 @@ draw_one_frame :: (dt: float, window: *Window) {
             // Making a button pulsating
             if released_source {
                 active_state = .SETTING_SOURCE;
-                log("mappings before:\n");
-                for active_profile_in_ui.mappings {
-                    dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                    log("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
-                }
+                log_mappings(active_profile_in_ui, "mappings before:");
                 active_mapping = mapping;
                 set_key_mapping_hook(window);
             }
@@ -1143,27 +1141,23 @@ draw_one_frame :: (dt: float, window: *Window) {
             // so test for null pointer. Need a better way to clear stale states, or remove current_value_pointer from it
             if changed {
                 active_mapping = mapping;
-                new_mode := cast(Mapping_Mode, mode_state.current_value_pointer.*);
-                destination_ptr := table_find_pointer(*active_profile_in_ui.mappings, mapping.source.code);
+                new_mode := mode_state.current_value_pointer.*.(Mapping_Mode);
+                destination_ptr := *active_binds[active_mapping.source.code];
                 old_mode := destination_ptr.mode;
+
                 destination_ptr.*.mode = new_mode;
-                active_mapping.*.source.mode = new_mode;
-                // We really rely on this one
-                active_mapping.*.destination.mode = new_mode;
+                active_mapping.*.mode = new_mode;
+                active_mapping.*.destination = destination_ptr.*;
 
-                if new_mode == .REMAP {
-                    if old_mode == .OPPOSITE || old_mode == .OPPOSITE_NO_REPRESS || old_mode == .NEUTRAL {
-                        table_remove(*active_profile_in_ui.mappings, destination_ptr.code);
-                    }
-
-                } else if new_mode == .OPPOSITE || new_mode == .OPPOSITE_NO_REPRESS || new_mode == .NEUTRAL {
-                    if old_mode == .REMAP {
-                        table_set(*active_profile_in_ui.mappings, destination_ptr.code, .{mode=new_mode, code=mapping.source.code, kind=mapping.source.kind});
-                    } else {
-                        dest_to_source_ptr := table_find_pointer(*active_profile_in_ui.mappings, destination_ptr.code);
-                        if dest_to_source_ptr dest_to_source_ptr.mode = new_mode;
-                    }
+                dest_to_source: Mapping_Bind;
+                if new_mode != .REMAP {
+                    dest_to_source.mode = new_mode;
+                    dest_to_source.code = mapping.source.code;
+                    dest_to_source.kind = mapping.source.kind;
                 }
+
+                active_binds[destination_ptr.code] = dest_to_source;
+
                 if next_state == .NOTHING {
                     finalize_state();
                 }
@@ -1246,7 +1240,7 @@ draw_one_frame :: (dt: float, window: *Window) {
 
         }
         if wasd_opposite_released || wasd_neutral_released || arrows_opposite_released || arrows_neutral_released {
-            if active_profile_in_ui.mappings_array.count > 0 {
+            if active_profile_in_ui.mappings.count > 0 {
                 subwindow_info_presets_confirmation.open = true;
             } else {
                 set_preset(selected_preset.preset, selected_preset.mode);
@@ -1359,13 +1353,14 @@ draw_one_frame :: (dt: float, window: *Window) {
     Simp.swap_buffers(window);
 
     if index_to_remove >= 0 {
-        mapping_to_remove := active_profile_in_ui.mappings_array[index_to_remove];
-        table_remove(*active_profile_in_ui.mappings, mapping_to_remove.source.code);
-        if mapping_to_remove.mode == .OPPOSITE || mapping_to_remove.mode == .OPPOSITE_NO_REPRESS || mapping_to_remove.mode == .NEUTRAL {
-            table_remove(*active_profile_in_ui.mappings, mapping_to_remove.destination.code);
-        }
-        array_ordered_remove_by_index(*active_profile_in_ui.mappings_array, index_to_remove);
-        table_remove(*state_table, dropdown_state_to_clean_up.hash);
+        mapping_to_remove := active_profile_in_ui.mappings[index_to_remove];
+
+        // NOTE: this unconditionally also removes dest-to-source mapping. Is it a mistake for
+        // simple remaps? I think it would only be an issue if we allowed "transitive" remaps, i.e.
+        // A->D and D->F. But I don't think it's a good idea to allow that anyway.
+        array_ordered_remove_by_index(*active_profile_in_ui.mappings, index_to_remove);
+        active_binds[mapping_to_remove.source.code] = dummy_bind;
+        active_binds[mapping_to_remove.destination.code] = dummy_bind;
 
         index_to_remove = -1;
         finalize_state();
@@ -1718,10 +1713,9 @@ GetRect_Type_Indicator :: struct {
     ENABLE_ASSERT=DEBUG,
 );
 #import "Control_Flow";
-#import "Hash_Table";
 Input :: #import "Input";
 Simp :: #import "Simp";
-#import "JDL";
+using JDL :: #import "JDL";
 using GetRect :: #import "GetRect_LeftHanded"()(Type_Indicator = GetRect_Type_Indicator);
 #import "Math";
 System :: #import "System";

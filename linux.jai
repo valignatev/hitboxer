@@ -217,7 +217,7 @@ detect_focused_program :: (thread: *Thread) -> error_code: s64 {
                     // This is likely a pointer on a stack, I have no idea how it worked,
                     // Because on Linux it literally dies lmao
                     global_profile := profiles[0];
-                    if global_profile.mappings_array.count > 0 {
+                    if global_profile.mappings.count > 0 {
                         active_profile = *global_profile;
                         set_mapping_resolving_hook();
                         continue;
@@ -570,6 +570,10 @@ start_input_handling :: (thread: *Thread) -> s64 {
 
             event_type := libinput_event_get_type(event);
 
+            if event_type == .LIBINPUT_EVENT_DEVICE_REMOVED {
+                handle_libinput_device_removed(event, uinput_fd);
+            }
+
             // Maybe there are devices that are mouse and keyboard at the same time,
             // and doing this will eat mouse movements or some shit. I dont' think this is
             // how Linux works - usually, if device has multiple capabilities, it will just
@@ -593,12 +597,10 @@ start_input_handling :: (thread: *Thread) -> s64 {
                 grab_timer_test_passed = true;
             }
 
-            if mapping_resolving_hook_is_installed {
-                handle_libinput_event(event, key, state, uinput_fd);
-            } else if mapping_setting_hook_is_installed {
+            if mapping_setting_hook_is_installed {
                 handle_libinput_event_to_set_mapping(event, key, state, uinput_fd);
-            } else if event_type == .LIBINPUT_EVENT_DEVICE_REMOVED {
-                handle_libinput_device_removed(event, uinput_fd);
+            } else if mapping_resolving_hook_is_installed {
+                handle_libinput_event(event, key, state, uinput_fd);
             } else {
                 simply_forward_libinput_keyboard_event(event, key, state, uinput_fd);
             }
@@ -666,54 +668,44 @@ handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state
         next_state := Mapping_State.NOTHING;
         if ev.value == xx Key_State.IS_DOWN && ev.type == EV_KEY {
             if active_state == .SETTING_SOURCE {
-                print("mappings before:\n");
-                for active_profile_in_ui.mappings {
-                    dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                    print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
+                log_mappings(active_profile_in_ui, "mappings before:");
+
+                current_source := active_mapping.source.code;
+                active_binds[current_source] = dummy_bind;
+                if current_source == KEY_RESERVED {
+                    next_state = .SETTING_DESTINATION;
                 }
 
-                old_source_code := active_mapping.source.code;
-                if old_source_code == KEY_RESERVED next_state = .SETTING_DESTINATION;
-
-                found, old_binding_from_old_source := table_find(*active_profile_in_ui.mappings, old_source_code);
-                print("Old source is %\n", old_binding_from_old_source);
+                existing_bind := active_binds[current_source];
+                log_debug("existing bind is %\n", existing_bind);
 
                 active_mapping.*.source.code = ev.code;
-                table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
+                active_binds[active_mapping.source.code] = active_mapping.destination;
 
                 if (
                     active_mapping.mode == .OPPOSITE ||
-                        active_mapping.mode == .NEUTRAL ||
-                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                    active_mapping.mode == .NEUTRAL ||
+                    active_mapping.mode == .OPPOSITE_NO_REPRESS
                 ) {
-                    table_remove(*active_profile_in_ui.mappings, active_mapping.destination.code);
-                    table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
-                }
-                // I don't think it matters whether we found it.
-                table_remove(*active_profile_in_ui.mappings, old_source_code);
-
-                print("mappings after:\n");
-                for active_profile_in_ui.mappings {
-                    dest_formatted := tprint("mode: %, kind: %, code: %", it.mode, it.kind, get_key_name(it.code));
-                    print("source: %, dest: %\n", get_key_name(it_index), dest_formatted);
+                    active_binds[active_mapping.destination.code] = active_mapping.source;
                 }
 
-                log("Set source %\n", ev.code);
+                log_mappings(active_profile_in_ui, "mappings after:");
+                log_debug("Set source %\n", ev.code);
             } else if active_state == .SETTING_DESTINATION {
                 next_state = .NOTHING;
-                old_destination_code := active_mapping.destination.code;
+                current_destination := active_mapping.destination.code;
                 active_mapping.*.destination.code = ev.code;
 
-                table_set(*active_profile_in_ui.mappings, active_mapping.source.code, active_mapping.destination);
+                active_binds[active_mapping.source.code] = active_mapping.destination;
                 if (
                     active_mapping.mode == .OPPOSITE ||
-                        active_mapping.mode == .NEUTRAL ||
-                        active_mapping.mode == .OPPOSITE_NO_REPRESS
+                    active_mapping.mode == .NEUTRAL ||
+                    active_mapping.mode == .OPPOSITE_NO_REPRESS
                 ) {
-                    table_remove(*active_profile_in_ui.mappings, old_destination_code);
-                    table_set(*active_profile_in_ui.mappings, active_mapping.destination.code, active_mapping.source);
+                    active_binds[current_destination] = active_mapping.source;
                 }
-                log("Set destination %\n", ev.code);
+                log_debug("Set destination %\n", ev.code);
             }
 
             if next_state == .NOTHING {
@@ -727,6 +719,8 @@ handle_libinput_event_to_set_mapping :: (event: *libinput_event, key: u32, state
 }
 
 handle_libinput_device_removed :: (event: *libinput_event, uinput_fd: s32) {
+    // TODO: Handle situation when one of devices that we grab gets removed.
+    // As in, update libinput_opened_devices table and so on.
     device := libinput_event_get_device(event);
     device_sysname := to_string(libinput_device_get_sysname(device));
     if device_sysname == virtual_device_sysname {
@@ -747,7 +741,6 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
     input_events: [2]input_event;
     write_original := true;
 
-    event_type := libinput_event_get_type(event);
     device := libinput_event_get_device(event);
     device_sysname := to_string(libinput_device_get_sysname(device));
 
@@ -790,8 +783,12 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
 
     if bind.mode == .REMAP {
         write_original = false;
-        bind_name := get_key_name(bind.code);
-        log("Found mapping: %\n", bind_name);
+
+        if current_program_state.runtime_debug {
+            bind_name := get_key_name(bind.code);
+            log_debug("Found mapping: %\n", bind_name);
+        }
+
         output_events[0] = input_event.{
             type=EV_KEY,
             code=cast(u16)bind.code,
@@ -805,6 +802,7 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
 
         written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
         if written < 0 {
+            bind_name := get_key_name(bind.code);
             log_error("Could not write one to one mapping for %\n", bind_name);
         }
         return;
@@ -1349,11 +1347,13 @@ platform_wait_for_message :: inline () -> need_to_rerender: bool {
 libc :: #library,system "libc";
 c_free :: (memory: *void) #foreign libc "free";
 
+#scope_file
+
+#import "Hash_Table";
 #import "Memory";
 #import "POSIX";
 #import "Sort";
 #import "String";
-using JDL :: #import "JDL";
 #import "xcb";
 #import "libxkbcommon";
 #import "Input";
