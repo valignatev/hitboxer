@@ -108,7 +108,6 @@ our_key :: (r: Rect, text: string, theme: *GR.Button_Theme, pressed_factor: floa
     frame_color = lerp(frame_color, theme.surface_color_flash, pressed_factor);
     // surface_color = lerp(surface_color, theme.surface_color_over, pressed_factor);
 
-    corner_color := lerp(frame_color, surface_color, 0.4);
     shape: Rectangle_Shape;
     rounded_rectangle(r, shape, surface_color, frame_color);
 

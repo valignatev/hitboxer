@@ -25,6 +25,7 @@ display_logs: [50]Display_Log;
 display_slot := 0;
 
 inputs_log: [24]Input_Event;
+event_slot := 0;
 
 // s32 because that's what it is on Linux lol
 Key_State :: enum s32 {
@@ -164,7 +165,6 @@ Input_Event :: struct {
 }
 
 
-event_slot := 0;
 // This gets written from input handling thread.
 // And it is read from main thread (that renders ui).
 // So it is technically possible to read half of the struct.
@@ -172,8 +172,8 @@ event_slot := 0;
 log_input_event :: (event: Input_Event) {
     e := event;
     e.timestamp = current_time_consensus();
-    inputs_log[event_slot % inputs_log.count] = e;
-    event_slot += 1;
+    inputs_log[event_slot] = e;
+    event_slot = (event_slot + 1) % inputs_log.count;
     platform_wake_up_main_thread();
 }
 
@@ -1617,10 +1617,25 @@ draw_inputs_window :: (state: *Subwindow_State, base_r: Rect, data: *void) {
         if pressed_factor {
             current_program_state.need_to_rerender = true;
         }
+
         our_key(rect, key_name, *key_theme, pressed_factor=pressed_factor);
 
+        // TODO: this cursor drawing code is shit
+        cursor_color := lerp(key_theme.frame_color, key_theme.surface_color_flash, pressed_factor);
+        if it_index + 1 == event_slot {
+            Simp.immediate_quad(
+                rect.x + rect.w + 3, rect.y,
+                rect.x + rect.w + 7 , rect.y + rect.h,
+                cursor_color,
+            );
+        } else if event_slot == 0 {
+            Simp.immediate_quad(
+                base_r.x + 3, base_r.y + 10,
+                base_r.x + 7 , base_r.y + 10 + height,
+                cursor_color,
+            );
+        }
     }
-
 }
 
 scroll_scrollable_region :: (state: *Scrollable_Region_State, max_y: float, scroll_value: *float) {
@@ -1684,8 +1699,8 @@ array_ordered_remove_by_pointer :: (array_pointer: *[]$T, item: *T) {
     }
 }
 
-UI_Font :: Simp.Dynamic_Font;
 
+UI_Font :: Simp.Dynamic_Font;
 small_label_font: *UI_Font;
 log_font: *UI_Font;
 inputs_font: *UI_Font;
@@ -1696,8 +1711,10 @@ header_font: *UI_Font;
 error_color := Vector4.{.86, .26, .11, .40};
 error_color_over := Vector4.{.86, .165, .105, .57};
 
+
 mapping_resolving_hook_is_installed := false;
 mapping_setting_hook_is_installed := false;
+
 
 GetRect_Type_Indicator :: struct {
     Window_Type :: *Window;
