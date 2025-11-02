@@ -589,7 +589,7 @@ start_input_handling :: (thread: *Thread) -> s64 {
             key := libinput_event_keyboard_get_key(keyboard_event);
             state := libinput_event_keyboard_get_key_state(keyboard_event);
 
-            if state == .PRESSED && key != HEALTHCHECK_KEY {
+            if state == .PRESSED && key != HEALTHCHECK_KEY && key != KEY_NUMLOCK {
                 log_input_event(.{key_code=key, state=xx state});
             }
 
@@ -597,9 +597,9 @@ start_input_handling :: (thread: *Thread) -> s64 {
                 grab_timer_test_passed = true;
             }
 
-            if mapping_setting_hook_is_installed {
+            if mapping_setting_hook_is_installed && key != KEY_NUMLOCK {
                 handle_libinput_event_to_set_mapping(event, key, state, uinput_fd);
-            } else if mapping_resolving_hook_is_installed {
+            } else if mapping_resolving_hook_is_installed && key != KEY_NUMLOCK {
                 handle_libinput_event(event, key, state, uinput_fd);
             } else {
                 simply_forward_libinput_keyboard_event(event, key, state, uinput_fd);
@@ -789,6 +789,25 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
             log_debug("Found mapping: %\n", bind_name);
         }
 
+        // TODO: extract this and make it work for ALL modes
+        if bind.code >= KEY_KP7 && bind.code <= KEY_KPDOT {
+            output_events[0] = input_event.{
+                type=EV_KEY,
+                code=KEY_NUMLOCK,
+                value=ev.value,
+            };
+            output_events[1] = input_event.{
+                type=EV_SYN,
+                code=SYN_REPORT,
+                value=0,
+            };
+
+            written := write(uinput_fd, output_events.data, size_of(input_event) * output_events.count);
+            if written < 0 {
+                log_error("Could not write one to one mapping for num lock\n");
+            }
+        }
+
         output_events[0] = input_event.{
             type=EV_KEY,
             code=cast(u16)bind.code,
@@ -805,6 +824,7 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
             bind_name := get_key_name(bind.code);
             log_error("Could not write one to one mapping for %\n", bind_name);
         }
+
         return;
     }
 
