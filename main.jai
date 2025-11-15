@@ -19,7 +19,7 @@ FOR FUTURE:
 // I think 256 key codes should be enough for any type of keyboard...
 // Indices are key scancodes
 KEY_NAMES: [65535]string;
-active_binds: [1000]Mapping_Bind;
+active_binds: [1024]Mapping_Bind;
 
 display_logs: [50]Display_Log;
 display_slot := 0;
@@ -92,10 +92,10 @@ Program_State :: struct {
 
     config_file_path: string = "settings.socd";
 }
-dummy_input_text_state: Text_Input_State;
 
 current_program_state: Program_State;
 
+dummy_input_text_state: Text_Input_State;
 dummy_bind := Mapping_Bind.{};
 
 get_key_mapping :: inline (source_scan_code: u32) -> Mapping_Bind {
@@ -434,12 +434,12 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
     tfh.start_from_memory(*handler, "settings.socd", settings_filename, raw_settings);
 
     if handler.failed {
-        tfh.error(*handler, "Your settings won't be saved. Delete the file so we can properly re-create it.\n");
+        tfh.error(handler, "Your settings won't be saved. Delete the file so we can properly re-create it.\n");
         return;
     }
 
     if handler.version != SETTINGS_VERSION {
-        tfh.error(*handler, "Unexpected version! Expected: %, got: %\n", SETTINGS_VERSION, handler.version);
+        tfh.error(handler, "Unexpected version! Expected: %, got: %\n", SETTINGS_VERSION, handler.version);
     }
 
     while true {
@@ -452,7 +452,7 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
         if !colon_found {
             // Then, we start lookign for profiles
             if !equal(line, "PROFILE_START") {
-                tfh.warn(*handler, "Expected profile separator, but found %\n, assuming no profiles configured", line);
+                tfh.warn(handler, "Expected profile separator, but found %\n, assuming no profiles configured", line);
                 break;
             }
         } else {
@@ -468,7 +468,7 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
                     if result == "true" current_program_state.runtime_debug = true;
                     continue;
                 case; {
-                    tfh.error(*handler, "Unexpected global configuration ignored: %\n", left);
+                    tfh.error(handler, "Unexpected global configuration ignored: %\n", left);
                     continue;
                 }
             }
@@ -481,7 +481,7 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
             line, line_found = tfh.consume_next_line(*handler);
             if !line_found {
                 // No configured profiles
-                tfh.warn(*handler, "Expected profile settings, but found %, assuming no profiles configured", line);
+                tfh.warn(handler, "Expected profile settings, but found %, assuming no profiles configured", line);
                 break;
             }
 
@@ -500,7 +500,7 @@ parse_settings :: (raw_settings: string, settings_filename: string) {
 Expected to find profile configuration string (aka something separated by colon) or PROFILE_END.
 Ignoring the line and trying to continue parsing. Config line was `%`
                     ERR
-                    tfh.error(*handler, error_msg, line);
+                    tfh.error(handler, error_msg, line);
                 }
                 continue;
             }
@@ -519,7 +519,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                         case "WINDOWS"; profile.platform = .WINDOWS;
                         case "LINUX"; profile.platform = .LINUX;
                         case;
-                            tfh.error(*handler, "Incorrect platform: %. Assuming Windows\n", platform);
+                            tfh.error(handler, "Incorrect platform: %. Assuming Windows\n", platform);
                             continue;
                     }
 
@@ -535,7 +535,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                     source: u32;
                     mapping_config := split(trim(right), separator=" ",, temp);
                     if mapping_config.count != 3 {
-                        tfh.error(*handler, "Incorrect mapping configuration, ignoring it. Expected MODE:source_bind:destination_bind, got %\n", right);
+                        tfh.error(handler, "Incorrect mapping configuration, ignoring it. Expected MODE:source_bind:destination_bind, got %\n", right);
                         continue;
                     }
 
@@ -561,7 +561,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                                 mapping_bind.mode = .REMAP;
                             }
                             case;
-                                tfh.error(*handler, "Incorrect mapping mode, ignoring it. Expected one of OPPOSITE|OPPOSITE_NO_REPRESS|NEUTRAL|REMAP, got %\n", mapping_mode);
+                                tfh.error(handler, "Incorrect mapping mode, ignoring it. Expected one of OPPOSITE|OPPOSITE_NO_REPRESS|NEUTRAL|REMAP, got %\n", mapping_mode);
                                 continue;
                         }
                     }
@@ -570,11 +570,11 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                     {
                         bind, success, remainder := string_to_int(mapping_config[1], T=u32);
                         if !success {
-                            tfh.error(*handler, "Incorrect bind, ignoring it. Got % which is an illegal key/button code\n", bind);
+                            tfh.error(handler, "Incorrect bind, ignoring it. Got % which is an illegal key/button code\n", bind);
                             continue;
                         }
                         if bind <= 0 {
-                            tfh.error(*handler, "Key bind is out of bounds, ignoring it. Got %\n", bind);
+                            tfh.error(handler, "Key bind is out of bounds, ignoring it. Got %\n", bind);
                             continue;
                         }
                         source = bind;
@@ -585,11 +585,11 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                     {
                         bind, success, remainder := string_to_int(mapping_config[2], T=u32);
                         if !success {
-                            tfh.error(*handler, "Incorrect bind, ignoring it. Got % which is an illegal key/button code\n", bind);
+                            tfh.error(handler, "Incorrect bind, ignoring it. Got % which is an illegal key/button code\n", bind);
                             continue;
                         }
                         if bind <= 0 {
-                            tfh.error(*handler, "Key bind is out of bounds, ignoring it. Got %\n", bind);
+                            tfh.error(handler, "Key bind is out of bounds, ignoring it. Got %\n", bind);
                             continue;
                         }
                         mapping_bind.code = bind;
@@ -602,7 +602,7 @@ Ignoring the line and trying to continue parsing. Config line was `%`
                         active_binds[mapping.destination.code] = mapping.source;
                     }
 
-                case; tfh.error(*handler, "Unexpected profile configuration ignored: %\n", left);
+                case; tfh.error(handler, "Unexpected profile configuration ignored: %\n", left);
             }
         }
     }

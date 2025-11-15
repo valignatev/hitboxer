@@ -763,7 +763,6 @@ handle_libinput_event :: (event: *libinput_event, key: u32, state: libinput_key_
 
     // Pass the real event into our virtual device.
     defer if write_original {
-
         written := write(uinput_fd, input_events.data, size_of(input_event) * output_events.count);
         if written < 0 {
             log_error("Could not pass the event on\n");

@@ -166,7 +166,7 @@ get_mouse_pointer_position :: inline (right_handed: bool) -> x: int, y: int, suc
     return xx x, xx y, s;
 }
 
-set_window_titile :: inline (window: *Window, title: string) {
+set_window_title :: inline (window: *Window, title: string) {
     window.base.set_window_title(window, title);
 }
 
