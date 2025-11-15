@@ -143,7 +143,7 @@ load_extensions :: (procs: *$T) -> success := false  {
 
 gl_load :: () -> bool {
     result := true;
-    result = load_procs(*egl_procs, "libEGL.so");
+    result = load_procs(*egl_procs, "libEGL.so.1");
     if !result return result;
     result = load_procs(*gl_procs, "libGL.so");
     if !result return result;

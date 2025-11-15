@@ -212,7 +212,7 @@ write_log :: (using log_string: Log_String) {
         runtime_support_default_logger(formatted_message, data, info);
         return;
     }
-    if also_log_to_stdout {
+    if also_log_to_stdout || !log_file.handle {
         #if DEBUG {
             runtime_support_default_logger(tprint("[%] - %", log_string.thread_index, message), data, info);
         } else {
@@ -220,6 +220,9 @@ write_log :: (using log_string: Log_String) {
         }
     }
 
+    if !log_file.handle {
+        return;
+    }
     // TODO: file_length (at least on Linux) segfaults when you call it before file_open. Mail fix in. Check Windows.
     length, success := file_length(log_file);
     if !success {
