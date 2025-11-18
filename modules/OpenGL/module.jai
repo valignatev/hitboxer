@@ -281,19 +281,12 @@ gl_create_context :: (display_handle: *void, window_handle: u64, major_version: 
                     GL_DEBUG_TYPE_ERROR_ARB :: 0x824C;
                     HIGH   :: 0x9146;
                     MEDIUM :: 0x9147;
-                    //                if Type == GL_DEBUG_TYPE_ERROR_ARB {
                     if (Severity == MEDIUM) || (Severity == HIGH) {
                         s: string;
                         s.count = Length-1;  // The Length includes a terminating 0, apparently.
                         s.data = Buffer.data;
 
                         log("[%] %:%: %\n", tag, loc.fully_pathed_filename, loc.line_number, s);
-
-                        // @@ Is there a way to print this only if the above function is not filtered? Tag print line to also include trace?
-                        //trace : []string = Debug.backtrace();
-                        //defer Debug.free_backtrace(trace);
-                        //for trace { print("    %", it); if it_index > 4 break; }
-
                         had_error = true;
                     }
                 } else {
@@ -314,7 +307,7 @@ gl_create_context :: (display_handle: *void, window_handle: u64, major_version: 
     }
 } else {
     DumpGLErrors :: inline (#discard tag: string, #discard loc := #caller_location) -> bool {
-        return false;  // @Hack
+        return false;
     }
 }
 
@@ -353,6 +346,7 @@ debug_log_params : struct {
     logger: Logger;
 };
 
+
 gl_debug_log :: (source: GLenum, type: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *u8, userParam: *void) #c_call {
     TEMPORARY_STORAGE_SIZE :: 1000;
     storage_buf: [TEMPORARY_STORAGE_SIZE] u8;
@@ -374,13 +368,14 @@ gl_debug_log :: (source: GLenum, type: GLenum, id: GLuint, severity: GLenum, len
             log("OGL: message = %", to_string(message));
         }
         if debug_log_params.break_on_error {
-            //if (type == GL_DEBUG_TYPE_ERROR_ARB) Debug.breakpoint();
             if (type == GL_DEBUG_TYPE_ERROR_ARB) debug_break();
         }
     }
 }
 
+
 #scope_export
+
 
 gl_enable_debug_output :: (break_on_error: bool = false) {
     debug_log_params.break_on_error = break_on_error;
@@ -397,6 +392,7 @@ gl_enable_debug_output :: (break_on_error: bool = false) {
 
 
 #scope_file
+
 
 #import "Basic";
 #import "Hash_Table";
