@@ -48,7 +48,8 @@ push_my_windows_context :: () #expand {
     `my_context.logger = my_logger;
     ts := *windows_temporary_storage;
     if (ts.data == null) {
-        set_initial_data(ts, TEMPORARY_STORAGE_SIZE, windows_temporary_storage_data.data);
+        ts.data = windows_temporary_storage_data.data;
+        ts.size = TEMPORARY_STORAGE_SIZE;
     }
     `my_context.temporary_storage = ts;
 
@@ -381,7 +382,7 @@ _opened_programs: Table(string, bool);
 
 get_list_of_programs :: () -> [..]string {
     using current_program_state;
-    defer table_reset(*_opened_programs);
+    defer table_reset_keeping_memory(*_opened_programs);
 
     result: [..]string;
     result.allocator = temp;
@@ -729,10 +730,8 @@ INPUT_Type :: enum u32 {
 INPUT :: struct {
     type: INPUT_Type;
     mi: MOUSEINPUT;
-    #place mi;
-    ki: KEYBDINPUT;
-    #place mi;
-    hi: HARDWAREINPUT;
+    #overlay(mi) ki: KEYBDINPUT;
+    #overlay(mi) hi: HARDWAREINPUT;
 }
 
 

@@ -573,8 +573,8 @@ init_key_code_tables :: () {
 
     // Make the tables at least kind of big so we don't flail.
     INITIAL_TABLE_SIZE :: 512;
-    init(*vk_to_key_code, INITIAL_TABLE_SIZE);
-    init(*key_code_to_vk, INITIAL_TABLE_SIZE);
+    table_resize(*vk_to_key_code, INITIAL_TABLE_SIZE);
+    table_resize(*key_code_to_vk, INITIAL_TABLE_SIZE);
 
     // ASCII characters:
     for i: 48..cast(u32)90 {

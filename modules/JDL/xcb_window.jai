@@ -10,6 +10,7 @@ Saved_Window_Info :: struct {
 
 XCB_Display :: struct {
     #as using base: Base_Display;
+    type = XCB_Display;
 
     handle: *xcb_connection_t;
     screen: *xcb_screen_t;
@@ -289,8 +290,6 @@ create_window :: (
     // background_color.green   = to_u16(background_color_rgb[1]);
     // background_color.blue    = to_u16(background_color_rgb[2]);
     // XAllocColor(d, cmap, *background_color);
-
-
 
     event_mask := xcb_event_mask_t.EXPOSURE | .STRUCTURE_NOTIFY | .FOCUS_CHANGE | .ENTER_WINDOW | .LEAVE_WINDOW | .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE | .POINTER_MOTION;
     window := xcb_generate_id(d.handle);
@@ -751,8 +750,7 @@ Sync_State :: struct {
 
     counter_id: u32;
     resize_id: xcb_sync_int64_t;
-    #place resize_id;
-    resize_id64: s64;
+    #overlay(resize_id) resize_id64: s64;
 
     resize_in_progress: bool;
 }

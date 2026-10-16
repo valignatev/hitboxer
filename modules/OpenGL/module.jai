@@ -126,7 +126,7 @@ load_extensions :: (procs: *$T) -> success := false  {
             is_avail_ptr := cast(*bool)((cast(*u8)procs) + m.offset_in_bytes);
             is_avail_ptr.* = ext_found;
             if !ext_found {
-                print("% is NO Tavailable\n", m.name);
+                print("% is NOT available\n", m.name);
                 return false;
             }
             print("% is available\n", m.name);

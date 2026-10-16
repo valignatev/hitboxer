@@ -5,25 +5,13 @@ which can sometimrs be inconvenient when using inside of functions because it pr
 the leading whitespaces, so you have to format it in a funky way.
 */
 S :: ($strings: ..string) -> string #expand {
-    #insert -> string {
-        builder: String_Builder;
-        {
-            print_to_builder(*builder, "return \"");
-            defer print_to_builder(*builder, "\";");
-            for strings {
-                replaced := replace(it, "\"", "\\\"");
-                replaced = replace(replaced, "\n", "\\n");
-                replaced = replace(replaced, "\t", "\\t");
-                // Jai does not support vertical tab or whatever this is.
-                // replaced = replace(replaced, "\v", "\\v");
-                replaced = replace(replaced, "\r", "\\r");
-                replaced = replace(replaced, "%", "\%");
-                print_to_builder(*builder, replaced);
-            }
-        }
-        result := builder_to_string(*builder);
-        return result;
+  return #run -> string {
+    builder: String_Builder;
+    for str : strings {
+      append(*builder, str);
     }
+    return builder_to_string(*builder);
+  };  
 }
 
 #scope_file
